@@ -23,7 +23,8 @@ db.once("open", () => console.log("✅ Connected to MongoDB"));
 // ====== 🔹 Schemas ======
 
 // Batting and Bowling Sub-schemas
-const batterSchema = new mongoose.Schema({
+
+const BatterSchema = new mongoose.Schema({
   name: String,
   runs: String,
   balls: String,
@@ -32,7 +33,7 @@ const batterSchema = new mongoose.Schema({
   strike_rate: String,
 });
 
-const bowlerSchema = new mongoose.Schema({
+const BowlerSchema = new mongoose.Schema({
   name: String,
   overs: String,
   maidens: String,
@@ -41,8 +42,12 @@ const bowlerSchema = new mongoose.Schema({
   economy: String,
 });
 
-// Match Schema
-const matchSchema = new mongoose.Schema({
+// const InningSchema = new mongoose.Schema({
+//   batting: [BatterSchema],
+//   bowling: [BowlerSchema],
+// });
+
+const MatchDataSchema = new mongoose.Schema({
   status: String,
   team1: String,
   team2: String,
@@ -52,15 +57,20 @@ const matchSchema = new mongoose.Schema({
   match_url: String,
   venue: String,
   date: String,
-  league: String,
   toss: String,
   player_of_the_match: String,
-  batters: [batterSchema],
-  bowlers: [bowlerSchema],
   current_run_rate: String,
-  createdAt: { type: Date, default: Date.now },
+  inning_1: {
+    batting: [BatterSchema],
+    bowling: [BowlerSchema],
+  },
+  inning_2: {
+    batting: [BatterSchema],
+    bowling: [BowlerSchema],
+  },
 });
-const MatchData = mongoose.model("MatchData", matchSchema, "MatchData");
+
+const MatchData = mongoose.model("MatchData", MatchDataSchema, "MatchData");
 
 // Weather Schema
 const weatherSchema = new mongoose.Schema({

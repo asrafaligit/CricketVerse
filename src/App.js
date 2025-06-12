@@ -7,13 +7,7 @@ import ScoreBoard from "./components/ScoreBoard"; // Import the new component
 import MatchDetails from "./components/MatchDetails";
 
 const App = () => {
-  const [victoryProbability, setVictoryProbability] = useState(65);
   const [currentMatch, setCurrentMatch] = useState(null);
-
-  const [wicketsData, setWicketsData] = useState({
-    team1: 6,
-    team2: 4,
-  });
 
   return (
     <Router>
@@ -30,7 +24,7 @@ const App = () => {
                 <ScoreBoard onCurrentMatchChange={setCurrentMatch} />
                 <div style={styles.chartsContainer}>
                   <RunRateChart match={currentMatch} />
-                  <WicketsChart data={wicketsData} />
+                  <WicketsChart match={currentMatch} />
                 </div>
               </>
             }

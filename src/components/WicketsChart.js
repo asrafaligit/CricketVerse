@@ -19,13 +19,26 @@ ChartJS.register(
   Legend
 );
 
-const WicketsChart = ({ data }) => {
+const WicketsChart = ({ match }) => {
+  console.log("WicketsChart match data:", match);
+  if (!match || !match.inning_1 || !match.inning_2) return null;
+
+  const countWickets = (batting) => {
+    return (batting || []).reduce((wickets, batter) => {
+      const isOut = batter.status?.toLowerCase().includes("not out") ? 0 : 1;
+      return wickets + isOut;
+    }, 0);
+  };
+
+  const team1Wickets = countWickets(match.inning_1.batting);
+  const team2Wickets = countWickets(match.inning_2.batting);
+
   const chartData = {
-    labels: ["Team 1", "Team 2"],
+    labels: [match.team1, match.team2],
     datasets: [
       {
-        label: "Wickets Taken",
-        data: [data.team1, data.team2],
+        label: "Wickets Lost",
+        data: [team1Wickets, team2Wickets],
         backgroundColor: ["rgba(3, 218, 198, 0.6)", "rgba(207, 102, 121, 0.6)"],
         borderColor: ["rgba(3, 218, 198, 1)", "rgba(207, 102, 121, 1)"],
         borderWidth: 1,
@@ -41,9 +54,6 @@ const WicketsChart = ({ data }) => {
         position: "top",
         labels: {
           color: "#e0e0e0",
-          font: {
-            family: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-          },
         },
       },
       title: {
@@ -54,26 +64,12 @@ const WicketsChart = ({ data }) => {
       y: {
         beginAtZero: true,
         max: 10,
-        grid: {
-          color: "rgba(255, 255, 255, 0.1)",
-        },
-        ticks: {
-          color: "#e0e0e0",
-          font: {
-            family: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-          },
-        },
+        ticks: { color: "#e0e0e0" },
+        grid: { color: "rgba(255, 255, 255, 0.1)" },
       },
       x: {
-        grid: {
-          color: "rgba(255, 255, 255, 0.1)",
-        },
-        ticks: {
-          color: "#e0e0e0",
-          font: {
-            family: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-          },
-        },
+        ticks: { color: "#e0e0e0" },
+        grid: { color: "rgba(255, 255, 255, 0.1)" },
       },
     },
   };
@@ -83,7 +79,6 @@ const WicketsChart = ({ data }) => {
     borderRadius: "15px",
     padding: "1.5rem",
     boxShadow: "0 4px 6px rgba(0, 0, 0, 0.1)",
-    transition: "transform 0.3s ease",
   };
 
   const titleStyle = {
@@ -96,7 +91,7 @@ const WicketsChart = ({ data }) => {
 
   return (
     <div style={containerStyle}>
-      <h2 style={titleStyle}>Wickets Taken</h2>
+      <h2 style={titleStyle}>Wickets Lost</h2>
       <Bar data={chartData} options={options} />
     </div>
   );

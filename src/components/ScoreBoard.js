@@ -16,23 +16,24 @@ const ScoreBoard = () => {
         const flattenedData = rawData.flat();
         const uniqueMatches = removeDuplicates(flattenedData);
 
-        const liveMatches = uniqueMatches.filter(
-          (match) => match.status !== "RESULT"
-        );
-        const resultMatches = uniqueMatches.filter(
-          (match) => match.status === "RESULT"
-        );
+        // Sort matches by status
+        // const liveMatches = uniqueMatches.filter(
+        //   (match) => match.status === "LIVE"
+        // );
+        // const resultMatches = uniqueMatches.filter(
+        //   (match) => match.status !== "LIVE"
+        // );
 
-        let sortedMatches = [];
-        if (liveMatches.length > 0) {
-          sortedMatches = [
-            ...liveMatches.slice(-3),
-            ...resultMatches.slice(-1),
-          ];
-        } else {
-          sortedMatches = uniqueMatches.slice(-3);
-        }
-
+        // let sortedMatches = [];
+        // if (liveMatches.length > 0) {
+        //   sortedMatches = [
+        //     ...liveMatches.slice(-3),
+        //     ...resultMatches.slice(-1),
+        //   ];
+        // } else {
+        //   sortedMatches = uniqueMatches.slice(-3);
+        // }
+        const sortedMatches = uniqueMatches.slice(-3);
         setMatches(sortedMatches);
       } catch (error) {
         console.error("Error fetching match data:", error);
@@ -40,7 +41,7 @@ const ScoreBoard = () => {
     };
 
     fetchMatchData();
-    const interval = setInterval(fetchMatchData, 10000);
+    const interval = setInterval(fetchMatchData, 500);
     return () => clearInterval(interval);
   }, []);
 
@@ -76,7 +77,7 @@ const ScoreBoard = () => {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.heading}>Live Matches</h2>
+      <h2 style={styles.heading}>Recent Matches</h2>
 
       <button
         style={{ ...styles.arrowButton, left: "10px" }}
