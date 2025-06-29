@@ -6,8 +6,6 @@ Documentations/
 # Python
 prediction/__pycache__/
 prediction/*.pyc
-*.pkl
-*.h5
 
 # Env files
 *.env
