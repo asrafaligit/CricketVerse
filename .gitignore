@@ -6,6 +6,10 @@ Documentations/
 # Python
 prediction/__pycache__/
 prediction/*.pyc
+prediction/ball_by_ball_probabilities/
+prediction/cleaned_dataset/
+prediction/encoded_second_inning_data/
+prediction/second_inning_data/
 
 # Env files
 *.env
