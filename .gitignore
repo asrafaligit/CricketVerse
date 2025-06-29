@@ -1,6 +1,7 @@
 # Node
 frontend/node_modules/
 backend/node_modules/
+backend/documentation/
 
 # Python
 prediction/__pycache__/
