@@ -1,0 +1,16 @@
+# Node
+frontend/node_modules/
+backend/node_modules/
+
+# Python
+prediction/__pycache__/
+prediction/*.pyc
+*.pkl
+*.h5
+
+# Env files
+*.env
+
+# System
+.DS_Store
+Thumbs.db
