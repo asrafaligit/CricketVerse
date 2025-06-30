@@ -170,61 +170,58 @@ def main():
     headers = {"User-Agent": ua.random}
     base_url = "https://www.espncricinfo.com/live-cricket-score"
 
-    while True:
-        response = fetch_with_retry(base_url, headers)
-        if not response:
-            print("❌ Main page fetch failed.")
-            time.sleep(10)
-            continue
+    response = fetch_with_retry(base_url, headers)
+    if not response:
+        print("❌ Main page fetch failed.")
+        return  # Just exit
 
-        soup = BeautifulSoup(response.content, "html.parser")
-        cards = soup.find_all("div", class_="ds-px-4 ds-py-3")
+    soup = BeautifulSoup(response.content, "html.parser")
+    cards = soup.find_all("div", class_="ds-px-4 ds-py-3")
 
-        all_data = []
+    all_data = []
 
-        for card in cards[:3]:  # Limit to first 3 cards
-            try:
-                status, team1, team2, score1, score2, result, match_page_url,match_format, venue, date = parse_live_card(card)
-                match_id = generate_match_id(team1, team2, date, venue)
+    for card in cards[:3]:  # Limit to first 3 cards
+        try:
+            status, team1, team2, score1, score2, result, match_page_url, match_format, venue, date = parse_live_card(card)
+            match_id = generate_match_id(team1, team2, date, venue)
 
-                if not match_page_url:
-                    continue
+            if not match_page_url:
+                continue
 
-                scorecard_url = get_scorecard_url_from_match_page(match_page_url, headers)
-                if not scorecard_url:
-                    continue
+            scorecard_url = get_scorecard_url_from_match_page(match_page_url, headers)
+            if not scorecard_url:
+                continue
 
-                match_info, innings_data = parse_scorecard_data(scorecard_url, headers)
+            match_info, innings_data = parse_scorecard_data(scorecard_url, headers)
 
-                match_data = {
-                    "match_id": match_id,
-                    "status": status,
-                    "team1": team1,
-                    "team2": team2,
-                    "score1": score1,
-                    "score2": score2,
-                    "match_result": result,
-                    "match_url": scorecard_url,
-                    "match_format": match_format,
-                    "venue": venue,
-                    "date": date,
-                    "toss": match_info.get("toss", "N/A"),
-                    "player_of_the_match": match_info.get("player_of_the_match", "N/A"),
-                    "current_run_rate": match_info.get("current_run_rate", "N/A"),
-                    "inning_1": innings_data.get("inning_1", {}),
-                    "inning_2": innings_data.get("inning_2", {})
-                }
+            match_data = {
+                "match_id": match_id,
+                "status": status,
+                "team1": team1,
+                "team2": team2,
+                "score1": score1,
+                "score2": score2,
+                "match_result": result,
+                "match_url": scorecard_url,
+                "match_format": match_format,
+                "venue": venue,
+                "date": date,
+                "toss": match_info.get("toss", "N/A"),
+                "player_of_the_match": match_info.get("player_of_the_match", "N/A"),
+                "current_run_rate": match_info.get("current_run_rate", "N/A"),
+                "inning_1": innings_data.get("inning_1", {}),
+                "inning_2": innings_data.get("inning_2", {})
+            }
 
-                all_data.append(match_data)
-            except Exception as e:
-                print(f"🚨 Error processing match: {e}")
-        
-        if all_data:
-            send_data_to_server(all_data)
-        else:
-            print("⚠️ No matches processed.")
+            all_data.append(match_data)
+        except Exception as e:
+            print(f"🚨 Error processing match: {e}")
 
-        time.sleep(20)
+    if all_data:
+        send_data_to_server(all_data)
+    else:
+        print("⚠️ No matches processed.")
+
 
 if __name__ == "__main__":
     main()
