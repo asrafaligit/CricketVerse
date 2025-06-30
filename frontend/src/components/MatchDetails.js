@@ -15,7 +15,7 @@ const MatchDetails = () => {
     const fetchMatchDetails = async () => {
       try {
         const res = await fetch(
-          `http://localhost:3001/get-match-by-matchid/${matchId}`
+          `https://cricketverse.onrender.com/get-match-by-matchid/${matchId}`
         );
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
