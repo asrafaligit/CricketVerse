@@ -4,6 +4,9 @@ from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 import hashlib
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 TEAM_NAME_MAP = {
