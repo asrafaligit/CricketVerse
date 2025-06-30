@@ -11,7 +11,10 @@ const ScoreBoard = ({ onCurrentMatchChange }) => {
   useEffect(() => {
     const fetchMatchData = async () => {
       try {
-        const response = await fetch("http://localhost:3001/get-data");
+        // Fetch match data from the backend
+        const response = await fetch(
+          `${process.env.REACT_APP_API_URL}/get-data`
+        );
         const rawData = await response.json();
         const uniqueMatches = removeDuplicates(rawData);
         const sortedMatches = uniqueMatches.slice(-3); // only take latest 3
