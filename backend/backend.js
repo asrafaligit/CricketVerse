@@ -12,10 +12,22 @@ app.use(bodyParser.json());
 // === MongoDB Connection ===
 const MONGO_URI =
   process.env.MONGO_URI || "mongodb://localhost:27017/CricketVerse";
-mongoose.connect(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+mongoose
+  .connect(MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => {
+    console.log("✅ MongoDB connected");
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running at http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ MongoDB connection failed:", err.message);
+    process.exit(1); // fail fast
+  });
+
 const db = mongoose.connection;
 db.on("error", console.error.bind(console, "MongoDB error:"));
 db.once("open", () => console.log("✅ Connected to MongoDB"));
@@ -115,7 +127,12 @@ async function fetchWeatherIfNotExists(city, date) {
   }
 }
 
-// === 📤 Save Match + Weather ===
+// ===  API Endpoints ===
+app.get("/", (req, res) => {
+  res.send("✅ CricketVerse Backend API is running");
+});
+
+// ===  Save Match + Weather ===
 app.post("/save-data", async (req, res) => {
   try {
     const payload = req.body;
