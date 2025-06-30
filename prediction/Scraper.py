@@ -40,7 +40,7 @@ def fetch_with_retry(url, headers, retries=3):
 
 def send_data_to_server(data):
     try:
-        response = requests.post("http://localhost:3001/save-data", json=data)
+        response = requests.post("{process.env.REACT_APP_API_URL}/save-data", json=data)
         if response.status_code == 200:
             print("✅ Data sent successfully.")
         else:
