@@ -25,5 +25,5 @@ jobs:
 
       - name: Run scraper
         env:
-          BACKEND_URL: https://cricketverse.onrender.com
-        run: python backend/Scraper.py
+          REACT_APP_API_URL: https://cricketverse.onrender.com
+        run: python Scraping/Scraper.py
