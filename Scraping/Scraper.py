@@ -3,6 +3,7 @@ import time
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 import hashlib
+import os
 
 
 TEAM_NAME_MAP = {
@@ -39,8 +40,9 @@ def fetch_with_retry(url, headers, retries=3):
     return None
 
 def send_data_to_server(data):
+    backend_url = os.environ.get("REACT_APP_API_URL", "http://localhost:3001")
     try:
-        response = requests.post("{process.env.REACT_APP_API_URL}/save-data", json=data)
+        response = requests.post(f"{backend_url}/save-data", json=data)
         if response.status_code == 200:
             print("✅ Data sent successfully.")
         else:
