@@ -11,7 +11,7 @@ import MatchDetails from "./components/MatchDetails";
 import TossDecisionAdvisor from "./components/TossDecisionAdvisor";
 
 const App = () => {
-  const [currentMatch, setCurrentMatch] = useState(null);
+  const [, setCurrentMatch] = useState(null);
 
   return (
     <Router>

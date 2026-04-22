@@ -1,0 +1,135 @@
+{
+  "apikey": "sample-key",
+  "status": "success",
+  "creditsLeft": 99,
+  "data": [
+    {
+      "id": "sample-match-001",
+      "name": "India vs Australia, 1st T20I",
+      "matchType": "t20",
+      "status": "Australia need 24 runs in 18 balls",
+      "venue": "Mumbai",
+      "date": "2026-04-21",
+      "dateTimeGMT": "2026-04-21T14:00:00Z",
+      "teams": [
+        "India",
+        "Australia"
+      ],
+      "teamInfo": [
+        {
+          "name": "India",
+          "shortname": "IND",
+          "img": "https://example.com/india.png"
+        },
+        {
+          "name": "Australia",
+          "shortname": "AUS",
+          "img": "https://example.com/australia.png"
+        }
+      ],
+      "score": [
+        {
+          "inning": "India Inning 1",
+          "r": 182,
+          "w": 6,
+          "o": 20
+        },
+        {
+          "inning": "Australia Inning 1",
+          "r": 159,
+          "w": 5,
+          "o": 17
+        }
+      ],
+      "t1": "India",
+      "t2": "Australia",
+      "t1s": "182/6 (20)",
+      "t2s": "159/5 (17)",
+      "matchStarted": true,
+      "matchEnded": false,
+      "ms": "live",
+      "series": "Bilateral T20 Series"
+    },
+    {
+      "id": "sample-match-002",
+      "name": "England vs Pakistan, 2nd T20I",
+      "matchType": "t20",
+      "status": "Pakistan won by 4 wickets",
+      "venue": "Lahore",
+      "date": "2026-04-20",
+      "dateTimeGMT": "2026-04-20T18:00:00Z",
+      "teams": [
+        "England",
+        "Pakistan"
+      ],
+      "teamInfo": [
+        {
+          "name": "England",
+          "shortname": "ENG",
+          "img": "https://example.com/england.png"
+        },
+        {
+          "name": "Pakistan",
+          "shortname": "PAK",
+          "img": "https://example.com/pakistan.png"
+        }
+      ],
+      "score": [
+        {
+          "inning": "England Inning 1",
+          "r": 168,
+          "w": 7,
+          "o": 20
+        },
+        {
+          "inning": "Pakistan Inning 1",
+          "r": 169,
+          "w": 6,
+          "o": 19.4
+        }
+      ],
+      "t1": "England",
+      "t2": "Pakistan",
+      "t1s": "168/7 (20)",
+      "t2s": "169/6 (19.4)",
+      "matchStarted": true,
+      "matchEnded": true,
+      "ms": "result",
+      "series": "Bilateral T20 Series"
+    },
+    {
+      "id": "sample-match-003",
+      "name": "South Africa vs Sri Lanka, 3rd ODI",
+      "matchType": "odi",
+      "status": "Match starts at Apr 22, 13:30 GMT",
+      "venue": "Johannesburg",
+      "date": "2026-04-22",
+      "dateTimeGMT": "2026-04-22T13:30:00Z",
+      "teams": [
+        "South Africa",
+        "Sri Lanka"
+      ],
+      "teamInfo": [
+        {
+          "name": "South Africa",
+          "shortname": "SA",
+          "img": "https://example.com/south-africa.png"
+        },
+        {
+          "name": "Sri Lanka",
+          "shortname": "SL",
+          "img": "https://example.com/sri-lanka.png"
+        }
+      ],
+      "score": [],
+      "t1": "South Africa",
+      "t2": "Sri Lanka",
+      "t1s": "",
+      "t2s": "",
+      "matchStarted": false,
+      "matchEnded": false,
+      "ms": "fixture",
+      "series": "Tri-Series 2026"
+    }
+  ]
+}

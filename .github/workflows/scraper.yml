@@ -2,7 +2,7 @@ name: Run Scraper
 
 on:
   schedule:
-    - cron: "*/6 * * * *" # Runs every 5 minute
+    - cron: "*/20 * * * *" # Runs every 20 minutes to stay within the free daily quota
   workflow_dispatch: # Lets you run it manually too
 
 jobs:
@@ -21,9 +21,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 fake-useragent python-dotenv
+          pip install -r Scraping/requirements.txt
 
       - name: Run scraper
         env:
           REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
-        run: python Scraping/Scraper.py
+        run: python Scraping/api_source.py

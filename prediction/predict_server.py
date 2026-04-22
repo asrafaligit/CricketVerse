@@ -13,7 +13,6 @@ def predict():
     try:
         data = request.get_json()
 
-        # Use keys exactly as expected by the model
         target_score = int(data["Target Score"])
         current_score = int(data["Innings Runs"])
         wickets_fallen = int(data["Innings Wickets"])

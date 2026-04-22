@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "../config";
 
 const ScoreBoard = ({ onCurrentMatchChange }) => {
   const [matches, setMatches] = useState([]);
@@ -12,20 +13,18 @@ const ScoreBoard = ({ onCurrentMatchChange }) => {
     const fetchMatchData = async () => {
       try {
         // Fetch match data from the backend
-        const response = await fetch(
-          `${process.env.REACT_APP_API_URL}/get-data`
-        );
+        const response = await fetch(`${API_BASE_URL}/get-data`);
         const rawData = await response.json();
         const uniqueMatches = removeDuplicates(rawData);
-        const sortedMatches = uniqueMatches.slice(-3); // only take latest 3
-        setMatches(sortedMatches);
+        const latestMatches = uniqueMatches.slice(0, 3);
+        setMatches(latestMatches);
       } catch (error) {
         console.error("Error fetching match data:", error);
       }
     };
 
     fetchMatchData();
-    const interval = setInterval(fetchMatchData, 500);
+    const interval = setInterval(fetchMatchData, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -39,12 +38,16 @@ const ScoreBoard = ({ onCurrentMatchChange }) => {
     return Array.from(seen.values());
   };
 
-  const moveLeft = () =>
+  const moveLeft = () => {
+    if (!matches.length) return;
     setCurrentIndex(
       (prevIndex) => (prevIndex - 1 + matches.length) % matches.length
     );
-  const moveRight = () =>
+  };
+  const moveRight = () => {
+    if (!matches.length) return;
     setCurrentIndex((prevIndex) => (prevIndex + 1) % matches.length);
+  };
 
   return (
     <div style={styles.container}>

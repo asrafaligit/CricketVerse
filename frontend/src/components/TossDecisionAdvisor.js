@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { API_BASE_URL } from "../config";
 
 const TOP_TEAMS = [
   "India",
@@ -16,9 +17,10 @@ const TossDecisionAdvisor = () => {
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [weather, setWeather] = useState({});
   const [decision, setDecision] = useState("");
+  const backendUrl = API_BASE_URL;
 
   useEffect(() => {
-    fetch("http://localhost:3001/get-data")
+    fetch(`${backendUrl}/get-data`)
       .then((res) => res.json())
       .then((raw) => {
         const uniqueMatches = new Map();
@@ -44,12 +46,12 @@ const TossDecisionAdvisor = () => {
         setMatches(Array.from(uniqueMatches.values()));
       })
       .catch(console.error);
-  }, []);
+  }, [backendUrl]);
 
   useEffect(() => {
     if (selectedMatch) {
       fetch(
-        `http://localhost:3001/fetch-weather/${encodeURIComponent(
+        `${backendUrl}/fetch-weather/${encodeURIComponent(
           selectedMatch.venue
         )}`
       )
@@ -73,7 +75,7 @@ const TossDecisionAdvisor = () => {
         })
         .catch(console.error);
     }
-  }, [selectedMatch]);
+  }, [backendUrl, selectedMatch]);
 
   const handleMatchSelect = (id) => {
     const match = matches.find((m) => m.match_id === id);

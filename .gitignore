@@ -10,6 +10,9 @@ prediction/ball_by_ball_probabilities/
 prediction/cleaned_dataset/
 prediction/encoded_second_inning_data/
 prediction/second_inning_data/
+Scraping/__pycache__/
+Scraping/tests/__pycache__/
+Scraping/fixtures/*.local.json
 
 # Env files
 *.env

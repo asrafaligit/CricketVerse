@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import Prediction from "./Prediction";
+import { API_BASE_URL } from "../config";
 
 const MatchDetails = () => {
   const { id: matchId } = useParams();
@@ -15,7 +16,7 @@ const MatchDetails = () => {
     const fetchMatchDetails = async () => {
       try {
         const res = await fetch(
-          `${process.env.REACT_APP_API_URL}/get-match-by-matchid/${matchId}`
+          `${API_BASE_URL}/get-match-by-matchid/${matchId}`
         );
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
         const data = await res.json();
@@ -28,12 +29,11 @@ const MatchDetails = () => {
     };
 
     if (matchId) {
-      fetchMatchDetails(); // initial load
-
-      intervalId = setInterval(fetchMatchDetails, 10000); // fetch every 10 seconds
+      fetchMatchDetails();
+      intervalId = setInterval(fetchMatchDetails, 30000);
     }
 
-    return () => clearInterval(intervalId); // cleanup
+    return () => clearInterval(intervalId);
   }, [matchId]);
 
   if (loading)
@@ -49,15 +49,17 @@ const MatchDetails = () => {
     match_result,
     toss,
     venue,
+    date,
+    series,
     player_of_the_match,
     current_run_rate,
     status,
+    score_breakdown,
     inning_1,
     inning_2,
   } = matchData;
 
   const isPredictableMatch = (match) => {
-    const t20Keywords = ["t20", "t-20", "twenty20"];
     const knownTeams = [
       "INDIA",
       "AUSTRALIA",
@@ -71,11 +73,15 @@ const MatchDetails = () => {
     const teamsSupported =
       knownTeams.includes(match.team1?.toUpperCase()) &&
       knownTeams.includes(match.team2?.toUpperCase());
-    const isT20 = t20Keywords.some((keyword) =>
-      match.match_result?.toLowerCase().includes(keyword)
-    );
+    const isT20 = /t20|t-20|twenty20/i.test(match.match_format || "");
     return teamsSupported && isT20;
   };
+
+  const hasDetailedScorecard =
+    Boolean(inning_1?.batting?.length) ||
+    Boolean(inning_1?.bowling?.length) ||
+    Boolean(inning_2?.batting?.length) ||
+    Boolean(inning_2?.bowling?.length);
 
   const renderBatting = (teamName, batters = []) => (
     <div style={styles.statsSection}>
@@ -149,6 +155,26 @@ const MatchDetails = () => {
     </div>
   );
 
+  const renderScoreBreakdown = (scores = []) => {
+    if (!scores.length) return null;
+
+    return (
+      <div style={styles.scoreBreakdownSection}>
+        <h2 style={styles.inningTeamTitle}>Innings Summary</h2>
+        <div style={styles.scoreBreakdownList}>
+          {scores.map((item, idx) => (
+            <div key={`${item.inning}-${idx}`} style={styles.scoreBreakdownCard}>
+              <p style={styles.scoreBreakdownInning}>{item.inning}</p>
+              <p style={styles.scoreBreakdownSummary}>
+                {item.summary || "Score unavailable"}
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.matchHeader}>
@@ -172,7 +198,7 @@ const MatchDetails = () => {
           <h3 style={styles.victoryTitle}>MATCH RESULT</h3>
           <p style={styles.victoryPercentage}>{match_result}</p>
         </div>
-      ) : isPredictableMatch(matchData) ? (
+      ) : isPredictableMatch(matchData) && hasDetailedScorecard ? (
         <div style={styles.victoryContainer}>
           <Prediction match={matchData} />
         </div>
@@ -180,12 +206,18 @@ const MatchDetails = () => {
         <div style={styles.victoryContainer}>
           <h3 style={styles.victoryTitle}>Live Match</h3>
           <p style={styles.victoryPercentage}>
-            Prediction not available for this match
+            Prediction is unavailable on the lightweight free API feed
           </p>
         </div>
       )}
 
       <div style={styles.metaInfo}>
+        <p>
+          <strong>Series:</strong> {series || "N/A"}
+        </p>
+        <p>
+          <strong>Date:</strong> {date || "N/A"}
+        </p>
         <p>
           <strong>Toss:</strong> {toss}
         </p>
@@ -199,20 +231,21 @@ const MatchDetails = () => {
           <strong>Run Rate:</strong> {current_run_rate}
         </p>
         <p>
-          <strong>Result:</strong> {match_result}
+          <strong>Status:</strong> {match_result}
         </p>
       </div>
-      {inning_1 && (
-        <>
-          {renderBatting(team1, inning_1.batting)}
-          {renderBowling(team2, inning_1.bowling)}
-        </>
-      )}
-      {inning_2 && (
-        <>
-          {renderBatting(team2, inning_2.batting)}
-          {renderBowling(team1, inning_2.bowling)}
-        </>
+      {renderScoreBreakdown(score_breakdown || [])}
+      {Boolean(inning_1?.batting?.length) && renderBatting(team1, inning_1.batting)}
+      {Boolean(inning_1?.bowling?.length) &&
+        renderBowling(team2, inning_1.bowling)}
+      {Boolean(inning_2?.batting?.length) && renderBatting(team2, inning_2.batting)}
+      {Boolean(inning_2?.bowling?.length) &&
+        renderBowling(team1, inning_2.bowling)}
+      {!hasDetailedScorecard && (
+        <div style={styles.infoNote}>
+          Detailed batting and bowling cards are disabled in free-summary mode to
+          save API credits.
+        </div>
       )}
     </div>
   );
@@ -301,27 +334,6 @@ const styles = {
     marginBottom: "15px",
     fontWeight: "bold",
   },
-  progressBarContainer: {
-    height: "10px",
-    backgroundColor: "#333",
-    borderRadius: "5px",
-    position: "relative",
-    marginBottom: "10px",
-  },
-  progressBar: {
-    height: "100%",
-    backgroundColor: "#bb86fc",
-    borderRadius: "5px",
-  },
-  progressDot: {
-    position: "absolute",
-    top: "50%",
-    transform: "translate(-50%, -50%)",
-    width: "12px",
-    height: "12px",
-    borderRadius: "50%",
-    backgroundColor: "#bb86fc",
-  },
   victoryPercentage: {
     textAlign: "center",
     color: "#bb86fc",
@@ -338,10 +350,37 @@ const styles = {
   statsSection: {
     marginTop: "30px",
   },
-  sectionTitle: {
-    fontSize: "1.5rem",
-    color: "#bb86fc",
-    marginBottom: "15px",
+  scoreBreakdownSection: {
+    marginTop: "30px",
+  },
+  scoreBreakdownList: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: "1rem",
+  },
+  scoreBreakdownCard: {
+    backgroundColor: "#1a1a1a",
+    border: "1px solid #2f2f2f",
+    borderRadius: "10px",
+    padding: "1rem",
+  },
+  scoreBreakdownInning: {
+    color: "#03dac6",
+    fontWeight: "bold",
+    marginBottom: "0.5rem",
+  },
+  scoreBreakdownSummary: {
+    color: "#ffffff",
+    fontSize: "1.2rem",
+    margin: 0,
+  },
+  infoNote: {
+    marginTop: "20px",
+    padding: "1rem",
+    backgroundColor: "#1a1a1a",
+    borderLeft: "4px solid #03dac6",
+    borderRadius: "8px",
+    color: "#cccccc",
   },
   tableContainer: {
     overflowX: "auto",

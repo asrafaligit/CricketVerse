@@ -10,7 +10,12 @@ const Prediction = ({ match }) => {
     const makePrediction = async () => {
       try {
         const inning2 = match.inning_2;
-        if (!inning2) return;
+        if (!inning2?.batting?.length) {
+          setMessage(
+            "Prediction needs a detailed scorecard, which is disabled in free API mode"
+          );
+          return;
+        }
 
         const ballsBowled =
           inning2.batting?.reduce((sum, b) => {
