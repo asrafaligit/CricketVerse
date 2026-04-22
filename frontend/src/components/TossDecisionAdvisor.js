@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { API_BASE_URL } from "../config";
+import React, { useEffect, useState } from "react";
+import { API_BASE_URL, TOSS_ADVISOR_API_URL } from "../config";
 
 const TOP_TEAMS = [
   "India",
@@ -14,248 +14,155 @@ const TOP_TEAMS = [
 
 const TossDecisionAdvisor = () => {
   const [matches, setMatches] = useState([]);
+  const [selectedMatchId, setSelectedMatchId] = useState("");
   const [selectedMatch, setSelectedMatch] = useState(null);
-  const [weather, setWeather] = useState({});
+  const [weather, setWeather] = useState(null);
   const [decision, setDecision] = useState("");
-  const backendUrl = API_BASE_URL;
+  const [error, setError] = useState("");
+  const [loadingDecision, setLoadingDecision] = useState(false);
 
   useEffect(() => {
-    fetch(`${backendUrl}/get-data`)
-      .then((res) => res.json())
+    fetch(`${API_BASE_URL}/get-data`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Failed to load matches: ${res.status}`);
+        return res.json();
+      })
       .then((raw) => {
         const uniqueMatches = new Map();
-        // Filter for T20 matches between top teams
-        // This is the original logic that was commented out
-        // raw.forEach((m) => {
-        //   if (!uniqueMatches.has(m.match_id)) {
-        //     uniqueMatches.set(m.match_id, m);
-        //   }
-        // });
-
-        // New logic to filter T20 matches between top teams
-        raw.forEach((m) => {
-          const isT20 = /t20/i.test(m.match_format || "");
+        raw.forEach((match) => {
+          const isT20 = /t20/i.test(match.match_format || "");
           const isTopTeams =
-            TOP_TEAMS.includes(m.team1) && TOP_TEAMS.includes(m.team2);
+            TOP_TEAMS.includes(match.team1) && TOP_TEAMS.includes(match.team2);
 
-          if (isT20 && isTopTeams && !uniqueMatches.has(m.match_id)) {
-            uniqueMatches.set(m.match_id, m);
+          if (isT20 && isTopTeams && !uniqueMatches.has(match.match_id)) {
+            uniqueMatches.set(match.match_id, match);
           }
         });
 
         setMatches(Array.from(uniqueMatches.values()));
       })
-      .catch(console.error);
-  }, [backendUrl]);
+      .catch((err) => setError(err.message || "Unable to load toss advisor"));
+  }, []);
 
   useEffect(() => {
-    if (selectedMatch) {
-      fetch(
-        `${backendUrl}/fetch-weather/${encodeURIComponent(
-          selectedMatch.venue
-        )}`
-      )
-        .then((res) => res.json())
-        .then((data) => {
-          const today =
-            data.days?.find((d) => d.datetime === selectedMatch.date) ||
-            data.days?.[0];
-          setWeather({
-            temperature: today.temp,
-            humidity: today.humidity,
-            windSpeed: today.windspeed,
-            cloudCover: today.cloudcover,
-            conditions: today.conditions,
-          });
-          if (!today) {
-            console.warn(
-              `⚠️ No weather data found for ${selectedMatch.venue} on ${selectedMatch.date}`
-            );
-          }
-        })
-        .catch(console.error);
-    }
-  }, [backendUrl, selectedMatch]);
-
-  const handleMatchSelect = (id) => {
-    const match = matches.find((m) => m.match_id === id);
+    const match = matches.find((item) => item.match_id === selectedMatchId) || null;
     setSelectedMatch(match);
     setDecision("");
-  };
 
-  const handleDecision = () => {
+    if (!match) {
+      setWeather(null);
+      return;
+    }
+
+    fetch(`${API_BASE_URL}/get-weather-by-match/${match.match_id}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setWeather(data))
+      .catch(() => setWeather(null));
+  }, [matches, selectedMatchId]);
+
+  const handleDecision = async () => {
     if (!selectedMatch || !weather) return;
-    fetch("http://localhost:5001/toss-decision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        team1: selectedMatch.team1,
-        team2: selectedMatch.team2,
-        venue: selectedMatch.venue,
-        weather: weather,
-      }),
-    })
-      .then((res) => res.json())
-      .then((json) => setDecision(json.decision))
-      .catch(console.error);
+    setLoadingDecision(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${TOSS_ADVISOR_API_URL}/toss-decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team1: selectedMatch.team1,
+          team2: selectedMatch.team2,
+          venue: selectedMatch.venue,
+          weather,
+        }),
+      });
+
+      const json = await response.json();
+      if (!response.ok) {
+        throw new Error(json.error || "Unable to get toss decision");
+      }
+
+      setDecision(json.decision);
+    } catch (err) {
+      setError(err.message || "Unable to get toss decision");
+    } finally {
+      setLoadingDecision(false);
+    }
   };
 
   return (
-    <div style={styles.container}>
-      <h1 style={styles.header}>🧠 Toss Decision Recommendation</h1>
+    <section className="cv-dashboard">
+      <div className="cv-panel advisor-shell">
+        <div className="cv-section-head">
+          <p className="cv-eyebrow">Toss strategy</p>
+          <h3>Toss Decision Advisor</h3>
+        </div>
 
-      {matches.length > 0 ? (
-        <div style={styles.matchSelector}>
-          <h2 style={styles.subHeading}>📝 Select a T20 Match</h2>
-          <div style={styles.selectWrapper}>
-            <select
-              style={styles.select}
-              onChange={(e) => handleMatchSelect(e.target.value)}
-              defaultValue=""
-            >
-              <option value="" disabled>
-                — Select match —
-              </option>
-              {matches.map((m, idx) => (
-                <React.Fragment key={m.match_id}>
-                  {idx !== 0 && (
-                    <option disabled>
-                      ───────────────────────────────────────
-                    </option>
-                  )}
-                  <option value={m.match_id}>
-                    {`${m.team1} vs ${m.team2} — ${m.date} @ ${m.venue}`}
+        {matches.length > 0 ? (
+          <>
+            <div className="advisor-select-wrap">
+              <select
+                className="advisor-select"
+                value={selectedMatchId}
+                onChange={(e) => setSelectedMatchId(e.target.value)}
+              >
+                <option value="">Select a T20 match</option>
+                {matches.map((match) => (
+                  <option key={match.match_id} value={match.match_id}>
+                    {`${match.team1} vs ${match.team2} - ${match.date}`}
                   </option>
-                </React.Fragment>
-              ))}
-            </select>
+                ))}
+              </select>
+            </div>
+
+            {selectedMatch && (
+              <div className="advisor-grid">
+                <div className="cv-panel advisor-card">
+                  <p className="detail-line">{selectedMatch.team1} vs {selectedMatch.team2}</p>
+                  <p className="detail-line detail-line--muted">{selectedMatch.venue}</p>
+                  <p className="cv-subtext">{selectedMatch.series || "Series unavailable"}</p>
+                </div>
+
+                <div className="cv-panel advisor-card">
+                  <p className="detail-line">Weather snapshot</p>
+                  {weather ? (
+                    <div className="cv-meta-list">
+                      <p><strong>Conditions:</strong> {weather.conditions || "N/A"}</p>
+                      <p><strong>Temperature:</strong> {weather.temperature ?? "N/A"} C</p>
+                      <p><strong>Humidity:</strong> {weather.humidity ?? "N/A"}%</p>
+                    </div>
+                  ) : (
+                    <p className="cv-subtext">Weather not available for this match yet.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {selectedMatch && (
+              <button
+                className="primary-button advisor-button"
+                onClick={handleDecision}
+                disabled={!weather || loadingDecision}
+              >
+                {loadingDecision ? "Thinking..." : "Suggest toss decision"}
+              </button>
+            )}
+          </>
+        ) : (
+          <p className="cv-subtext">
+            No eligible T20 matches between supported teams are available right now.
+          </p>
+        )}
+
+        {error && <div className="cv-error advisor-error">{error}</div>}
+        {decision && (
+          <div className="advisor-result">
+            Suggested decision: <strong>{decision}</strong>
           </div>
-        </div>
-      ) : (
-        <div style={styles.noMatchContainer}>
-          <h2 style={styles.noMatchHeading}>⚠️ No Eligible Matches Found</h2>
-          <p style={styles.noMatchText}>
-            Only <strong>T20</strong> matches between major international teams
-            (India, Australia, England, Pakistan, West Indies, South Africa, Sri
-            Lanka, Bangladesh) will be listed here.
-          </p>
-        </div>
-      )}
-
-      {selectedMatch && weather.temperature != null && (
-        <div style={styles.infoBox}>
-          <p>
-            <strong>Venue:</strong> {selectedMatch.venue}
-          </p>
-          <p>
-            <strong>Date:</strong> {selectedMatch.date}
-          </p>
-          <p>
-            <strong>Weather:</strong> {weather.conditions},{" "}
-            {weather.temperature}°C, Humidity {weather.humidity}%
-          </p>
-          <button style={styles.button} onClick={handleDecision}>
-            Suggest Decision
-          </button>
-        </div>
-      )}
-
-      {decision && (
-        <div style={styles.result}>
-          🏆 Suggested Decision: <span style={styles.decision}>{decision}</span>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </section>
   );
-};
-
-const styles = {
-  container: {
-    maxWidth: "700px",
-    margin: "auto",
-    padding: "2rem",
-    color: "#e0e0e0",
-    background: "#121212",
-  },
-  header: {
-    fontSize: "2.5rem",
-    color: "#bb86fc",
-    marginBottom: "1.5rem",
-    textAlign: "center",
-  },
-  matchSelector: {
-    marginBottom: "1.5rem",
-    padding: "1rem",
-    border: "1px solid #03dac6",
-    borderRadius: "8px",
-  },
-  subHeading: {
-    fontSize: "1.6rem",
-    color: "#03dac6",
-    marginBottom: "1rem",
-    textAlign: "center",
-  },
-  selectWrapper: {
-    padding: "0.5rem",
-    backgroundColor: "#1e1e1e",
-    borderRadius: "6px",
-  },
-  select: {
-    width: "100%",
-    padding: "1rem",
-    fontSize: "1.1rem",
-    background: "#2c2c2c",
-    color: "#fff",
-    border: "1px solid #03dac6",
-    borderRadius: "6px",
-    appearance: "none",
-  },
-  infoBox: {
-    margin: "1.5rem 0",
-    padding: "1rem",
-    border: "1px dashed #03dac6",
-    borderRadius: "6px",
-  },
-  button: {
-    padding: "0.8rem 1.2rem",
-    background: "#03dac6",
-    border: "none",
-    borderRadius: "6px",
-    fontSize: "1.1rem",
-    color: "#121212",
-    cursor: "pointer",
-    marginTop: "1rem",
-    fontWeight: "bold",
-  },
-  result: {
-    marginTop: "2rem",
-    fontSize: "1.8rem",
-    textAlign: "center",
-    color: "#03dac6",
-  },
-  decision: {
-    fontWeight: "bold",
-    color: "#ffffff",
-  },
-  noMatchContainer: {
-    backgroundColor: "#1e1e1e",
-    border: "2px dashed #bb86fc",
-    borderRadius: "12px",
-    padding: "2rem",
-    marginTop: "2rem",
-    textAlign: "center",
-    color: "#e0e0e0",
-  },
-  noMatchHeading: {
-    fontSize: "1.8rem",
-    color: "#ff5252",
-    marginBottom: "1rem",
-  },
-  noMatchText: {
-    fontSize: "1.3rem",
-    color: "#cccccc",
-    lineHeight: "1.6",
-  },
 };
 
 export default TossDecisionAdvisor;

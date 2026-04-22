@@ -23,6 +23,17 @@ const SCORECARD_FIXTURE_PATH =
 const LIVE_SCORECARD_REFRESH_MS = 5 * 60 * 1000;
 const FAILED_SCORECARD_RETRY_MS = 30 * 60 * 1000;
 const COMPLETED_SCORECARD_REFRESH_MS = 24 * 60 * 60 * 1000;
+const APP_TIMEZONE = process.env.CRICKET_DATA_TIMEZONE || "Asia/Kolkata";
+const DAY_REFRESH_START_HOUR = Number(process.env.DAY_REFRESH_START_HOUR || 8);
+const NIGHT_REFRESH_START_HOUR = Number(process.env.NIGHT_REFRESH_START_HOUR || 23);
+const DAY_REFRESH_INTERVAL_MS =
+  Number(process.env.DAY_REFRESH_INTERVAL_MINUTES || 20) * 60 * 1000;
+const NIGHT_REFRESH_INTERVAL_MS =
+  Number(process.env.NIGHT_REFRESH_INTERVAL_MINUTES || 60) * 60 * 1000;
+const MATCH_FIXTURE_PATH =
+  process.env.CRICKET_DATA_FIXTURE_PATH ||
+  path.join("Scraping", "fixtures", "sample_matches.json");
+const CRICKET_DATA_ENDPOINT = process.env.CRICKET_DATA_ENDPOINT || "matches";
 
 mongoose
   .connect(MONGO_URI, {
@@ -31,6 +42,7 @@ mongoose
   })
   .then(() => {
     console.log("MongoDB connected");
+    startAutoRefreshLoop();
     app.listen(PORT, () => {
       console.log(`Server running at http://localhost:${PORT}`);
     });
@@ -172,6 +184,336 @@ const weatherSchema = new mongoose.Schema({
 const MatchData = mongoose.model("MatchData", MatchDataSchema, "MatchData");
 const WeatherData = mongoose.model("WeatherData", weatherSchema, "WeatherData");
 
+let refreshState = {
+  inProgress: false,
+  lastRunStartedAt: null,
+  lastRunCompletedAt: null,
+  lastRunStatus: "idle",
+  lastRunError: "",
+  lastRunOutput: "",
+  trigger: "startup",
+  nextRefreshAt: null,
+};
+
+function getLocalHour(date = new Date()) {
+  return Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: APP_TIMEZONE,
+      hour: "numeric",
+      hour12: false,
+    }).format(date)
+  );
+}
+
+function isDayRefreshWindow(date = new Date()) {
+  const hour = getLocalHour(date);
+  return hour >= DAY_REFRESH_START_HOUR && hour < NIGHT_REFRESH_START_HOUR;
+}
+
+function getRefreshIntervalMs(date = new Date()) {
+  return isDayRefreshWindow(date)
+    ? DAY_REFRESH_INTERVAL_MS
+    : NIGHT_REFRESH_INTERVAL_MS;
+}
+
+function scheduleNextRefresh() {
+  const nextRefreshAt = new Date(Date.now() + getRefreshIntervalMs());
+  refreshState.nextRefreshAt = nextRefreshAt;
+  return nextRefreshAt;
+}
+
+function cleanTeamName(teamName) {
+  return String(teamName || "TBD").trim() || "TBD";
+}
+
+function parseMatchDateTime(match) {
+  const raw = match?.dateTimeGMT;
+  if (raw) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  if (match?.date) {
+    const parsed = new Date(`${String(match.date).split("T")[0]}T12:00:00Z`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function normalizeStatus(match) {
+  const ms = String(match?.ms || "").trim().toLowerCase();
+  if (ms === "result") return "RESULT";
+  if (ms === "fixture") return "FIXTURE";
+  if (ms) return "LIVE";
+
+  if (match?.matchEnded) return "RESULT";
+  if (match?.matchStarted) return "LIVE";
+
+  const statusText = String(match?.status || "").toLowerCase();
+  if (/(won by|match tied|draw|no result|abandoned)/.test(statusText)) {
+    return "RESULT";
+  }
+
+  return "FIXTURE";
+}
+
+function getTeamNames(match) {
+  const teamInfo = toArray(match?.teamInfo).filter((team) => team?.name);
+  if (teamInfo.length >= 2) {
+    return [cleanTeamName(teamInfo[0].name), cleanTeamName(teamInfo[1].name)];
+  }
+
+  const teams = toArray(match?.teams).filter(Boolean).map(cleanTeamName);
+  if (teams.length >= 2) {
+    return [teams[0], teams[1]];
+  }
+
+  return [cleanTeamName(match?.t1), cleanTeamName(match?.t2)];
+}
+
+function getTeamImages(match) {
+  const teamInfo = toArray(match?.teamInfo);
+  if (teamInfo.length >= 2) {
+    return [String(teamInfo[0]?.img || ""), String(teamInfo[1]?.img || "")];
+  }
+
+  return [String(match?.t1img || ""), String(match?.t2img || "")];
+}
+
+function formatScoreSummary(score) {
+  const runs = score?.r;
+  const wickets = score?.w;
+  const overs = score?.o;
+
+  if (runs == null || runs === "") return "";
+
+  let summary = String(runs);
+  if (wickets != null && wickets !== "") summary += `/${wickets}`;
+  if (overs != null && overs !== "") summary += ` (${overs})`;
+  return summary;
+}
+
+function buildScoreBreakdown(match, team1, team2) {
+  const structuredScores = toArray(match?.score);
+  if (structuredScores.length) {
+    return structuredScores.map((score) => ({
+      inning: String(score?.inning || "").trim(),
+      runs: score?.r ?? null,
+      wickets: score?.w ?? null,
+      overs: score?.o ?? null,
+      summary: formatScoreSummary(score),
+    }));
+  }
+
+  const fallback = [];
+  if (match?.t1s) {
+    fallback.push({
+      inning: `${team1} Inning 1`,
+      runs: null,
+      wickets: null,
+      overs: null,
+      summary: String(match.t1s).trim(),
+    });
+  }
+  if (match?.t2s) {
+    fallback.push({
+      inning: `${team2} Inning 1`,
+      runs: null,
+      wickets: null,
+      overs: null,
+      summary: String(match.t2s).trim(),
+    });
+  }
+  return fallback;
+}
+
+function extractTeamScores(match, team1, team2) {
+  const score1 = String(match?.t1s || "").trim();
+  const score2 = String(match?.t2s || "").trim();
+  if (score1 || score2) {
+    return [score1 || "Yet to bat", score2 || "Yet to bat"];
+  }
+
+  const breakdown = buildScoreBreakdown(match, team1, team2);
+  return [
+    breakdown[0]?.summary || "Yet to bat",
+    breakdown[1]?.summary || "Yet to bat",
+  ];
+}
+
+function normalizeMatch(match, endpoint) {
+  const [team1, team2] = getTeamNames(match);
+  const [team1_img, team2_img] = getTeamImages(match);
+  const score_breakdown = buildScoreBreakdown(match, team1, team2);
+  const [score1, score2] = extractTeamScores(match, team1, team2);
+  const parsedDate = parseMatchDateTime(match);
+
+  return {
+    match_id: String(match?.id || "").trim(),
+    status: normalizeStatus(match),
+    team1,
+    team2,
+    team1_img,
+    team2_img,
+    score1,
+    score2,
+    match_result: String(match?.status || "Status unavailable").trim(),
+    match_url: "",
+    match_format: String(match?.matchType || "").trim().toLowerCase(),
+    venue: String(match?.venue || "N/A").trim(),
+    date: parsedDate ? parsedDate.toISOString().split("T")[0] : "N/A",
+    series: String(match?.series || match?.name || "").trim(),
+    toss: "N/A",
+    player_of_the_match: "N/A",
+    current_run_rate: "N/A",
+    score_breakdown,
+    inning_1: { batting: [], bowling: [] },
+    inning_2: { batting: [], bowling: [] },
+    source_endpoint: endpoint,
+    last_synced_at: new Date(),
+  };
+}
+
+async function fetchMatchesPayload() {
+  if (isFixtureMode()) {
+    const fixturePath = getAbsoluteFixturePath(MATCH_FIXTURE_PATH);
+    return readJsonFixture(fixturePath);
+  }
+
+  const apiKey = process.env.CRICKET_DATA_API_KEY;
+  if (!apiKey) {
+    throw new Error("CRICKET_DATA_API_KEY is missing");
+  }
+
+  const response = await axios.get(`${CRICKET_API_BASE_URL}/${CRICKET_DATA_ENDPOINT}`, {
+    params: {
+      apikey: apiKey,
+      offset: 0,
+    },
+    timeout: 20000,
+  });
+
+  return response.data;
+}
+
+async function persistMatches(payload) {
+  if (!Array.isArray(payload)) {
+    throw new Error("Expected an array of match data");
+  }
+
+  const uniqueWeatherChecks = new Set();
+
+  for (const match of payload) {
+    if (match.status === "RESULT") {
+      continue;
+    }
+
+    const city = match.venue?.trim();
+    const date = match.date?.trim();
+    if (!city || !date || city === "N/A" || date === "N/A") {
+      continue;
+    }
+
+    const key = `${city.toLowerCase()}|${date}`;
+    if (uniqueWeatherChecks.has(key)) {
+      continue;
+    }
+
+    await fetchWeatherIfNotExists(city, date);
+    uniqueWeatherChecks.add(key);
+  }
+
+  const documents = payload
+    .filter((match) => match.match_id)
+    .map((match) => ({
+      ...match,
+      last_synced_at: new Date(),
+      createdAt: new Date(),
+    }));
+
+  if (documents.length) {
+    await MatchData.insertMany(documents, { ordered: false });
+  }
+
+  return documents.length;
+}
+
+async function refreshLiveMatchFeed(trigger = "manual") {
+  if (refreshState.inProgress) {
+    return Promise.resolve({
+      ok: false,
+      skipped: true,
+      reason: "A refresh is already in progress.",
+    });
+  }
+
+  refreshState = {
+    ...refreshState,
+    inProgress: true,
+    lastRunStartedAt: new Date(),
+    lastRunStatus: "running",
+    lastRunError: "",
+    lastRunOutput: "",
+    trigger,
+  };
+
+  try {
+    const payload = await fetchMatchesPayload();
+    const rawMatches = toArray(payload?.data);
+    const normalizedMatches = rawMatches
+      .map((match) => normalizeMatch(match, isFixtureMode() ? "fixture" : CRICKET_DATA_ENDPOINT))
+      .filter((match) => match.match_id);
+    const savedCount = await persistMatches(normalizedMatches);
+    const creditsLeft = payload?.creditsLeft;
+    const output = `Saved ${savedCount} matches${creditsLeft != null ? `, credits left: ${creditsLeft}` : ""}`;
+
+    refreshState = {
+      ...refreshState,
+      inProgress: false,
+      lastRunCompletedAt: new Date(),
+      lastRunStatus: "success",
+      lastRunError: "",
+      lastRunOutput: output,
+    };
+    scheduleNextRefresh();
+    return { ok: true, code: 0, output, error: "" };
+  } catch (error) {
+    refreshState = {
+      ...refreshState,
+      inProgress: false,
+      lastRunCompletedAt: new Date(),
+      lastRunStatus: "failed",
+      lastRunError: error.message,
+      lastRunOutput: "",
+    };
+    scheduleNextRefresh();
+    return { ok: false, code: null, output: "", error: error.message };
+  }
+}
+
+function startAutoRefreshLoop() {
+  scheduleNextRefresh();
+
+  const tick = async () => {
+    const nextRefreshAt = refreshState.nextRefreshAt
+      ? new Date(refreshState.nextRefreshAt).getTime()
+      : 0;
+
+    if (!refreshState.inProgress && Date.now() >= nextRefreshAt) {
+      await refreshLiveMatchFeed("auto");
+    }
+
+    setTimeout(tick, 60 * 1000);
+  };
+
+  setTimeout(tick, 10 * 1000);
+}
+
 function getAbsoluteFixturePath(relativeOrAbsolutePath) {
   return path.isAbsolute(relativeOrAbsolutePath)
     ? relativeOrAbsolutePath
@@ -263,6 +605,13 @@ function inferTeamFromInningName(inningName, match, fallbackIndex = 0) {
 }
 
 function normalizeBatterRow(row, teamName, inningsLabel) {
+  const playerNode =
+    row?.player ||
+    row?.batsman ||
+    row?.batter ||
+    row?.playerDetails ||
+    row?.athlete ||
+    {};
   const runs = pickField(row, ["runs", "r", "score"]);
   const balls = pickField(row, ["balls", "b"]);
   const fours = pickField(row, ["fours", "4s", "four", "foursCount"]);
@@ -284,7 +633,16 @@ function normalizeBatterRow(row, teamName, inningsLabel) {
 
   return {
     name: String(
-      pickField(row, ["name", "playerName", "player", "batsman", "batter"]) ||
+      pickField(row, [
+        "name",
+        "playerName",
+        "batsman",
+        "batter",
+        "batsmanName",
+        "fullName",
+        "fullname",
+      ]) ||
+        pickField(playerNode, ["name", "fullName", "fullname", "longName", "shortName"]) ||
         "Unknown Player"
     ),
     team: teamName,
@@ -299,6 +657,12 @@ function normalizeBatterRow(row, teamName, inningsLabel) {
 }
 
 function normalizeBowlerRow(row, teamName, inningsLabel) {
+  const playerNode =
+    row?.player ||
+    row?.bowler ||
+    row?.playerDetails ||
+    row?.athlete ||
+    {};
   const overs = pickField(row, ["overs", "o"]);
   const maidens = pickField(row, ["maidens", "m"]);
   const runsConceded = pickField(row, ["runsConceded", "runs", "r"]);
@@ -307,7 +671,15 @@ function normalizeBowlerRow(row, teamName, inningsLabel) {
 
   return {
     name: String(
-      pickField(row, ["name", "playerName", "player", "bowler"]) ||
+      pickField(row, [
+        "name",
+        "playerName",
+        "bowler",
+        "bowlerName",
+        "fullName",
+        "fullname",
+      ]) ||
+        pickField(playerNode, ["name", "fullName", "fullname", "longName", "shortName"]) ||
         "Unknown Bowler"
     ),
     team: teamName,
@@ -739,70 +1111,26 @@ app.get("/", (req, res) => {
 
 app.post("/save-data", async (req, res) => {
   try {
-    const payload = req.body;
-    if (!Array.isArray(payload)) {
-      return res.status(400).send("Expected an array of match data");
-    }
-
-    const uniqueWeatherChecks = new Set();
-
-    for (const match of payload) {
-      if (match.status === "RESULT") {
-        continue;
-      }
-
-      const city = match.venue?.trim();
-      const date = match.date?.trim();
-      if (!city || !date) {
-        continue;
-      }
-
-      const key = `${city.toLowerCase()}|${date}`;
-      if (uniqueWeatherChecks.has(key)) {
-        continue;
-      }
-
-      await fetchWeatherIfNotExists(city, date);
-      uniqueWeatherChecks.add(key);
-    }
-
-    const operations = payload
-      .filter((match) => match.match_id)
-      .map((match) => ({
-        updateOne: {
-          filter: { match_id: match.match_id },
-          update: {
-            $set: {
-              ...match,
-              last_synced_at: new Date(),
-            },
-            $setOnInsert: {
-              createdAt: new Date(),
-            },
-          },
-          upsert: true,
-        },
-      }));
-
-    if (operations.length) {
-      await MatchData.bulkWrite(operations, { ordered: false });
-    }
-
+    await persistMatches(req.body);
     res.send("Match and weather data saved.");
   } catch (error) {
     console.error("Failed to save data:", error);
-    res.status(500).send("Internal server error");
+    res.status(500).send(error.message || "Internal server error");
   }
 });
 
 app.get("/get-data", async (req, res) => {
   try {
+    const parsedLimit = Number(req.query.limit);
+    const limitStage = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? [{ $limit: parsedLimit }]
+      : [];
     const matches = await MatchData.aggregate([
       { $sort: { last_synced_at: -1, createdAt: -1 } },
       { $group: { _id: "$match_id", doc: { $first: "$$ROOT" } } },
       { $replaceRoot: { newRoot: "$doc" } },
       { $sort: { last_synced_at: -1, createdAt: -1 } },
-      { $limit: 10 },
+      ...limitStage,
     ]);
     res.json(matches);
   } catch (err) {
@@ -833,6 +1161,88 @@ app.get("/get-match-by-matchid/:matchId", async (req, res) => {
     console.error("Error fetching match by match_id:", err.message);
     res.status(500).send("Failed to fetch match");
   }
+});
+
+app.get("/get-match-history/:matchId", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const history = await MatchData.find({ match_id: req.params.matchId })
+      .sort({ last_synced_at: -1, createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    res.json(history);
+  } catch (err) {
+    console.error("Error fetching match history:", err.message);
+    res.status(500).send("Failed to fetch match history");
+  }
+});
+
+app.get("/get-weather-by-match/:matchId", async (req, res) => {
+  try {
+    const match = await MatchData.findOne({ match_id: req.params.matchId })
+      .sort({ last_synced_at: -1, createdAt: -1 })
+      .lean();
+
+    if (!match) {
+      return res.status(404).send("Match not found");
+    }
+
+    const city = String(match.venue || "").trim();
+    const date = String(match.date || "").trim();
+
+    if (!city || !date || city === "N/A" || date === "N/A") {
+      return res.status(404).send("Weather unavailable for this match");
+    }
+
+    await fetchWeatherIfNotExists(city, date);
+    const weather = await WeatherData.findOne({ city, date })
+      .sort({ fetchedAt: -1 })
+      .lean();
+
+    if (!weather) {
+      return res.status(404).send("Weather unavailable for this match");
+    }
+
+    res.json(weather);
+  } catch (err) {
+    console.error("Error fetching weather by match:", err.message);
+    res.status(500).send("Failed to fetch match weather");
+  }
+});
+
+app.get("/refresh-status", (req, res) => {
+  res.json({
+    ...refreshState,
+    recommendedIntervalMs: getRefreshIntervalMs(),
+    window: isDayRefreshWindow() ? "day" : "night",
+    timezone: APP_TIMEZONE,
+  });
+});
+
+app.post("/refresh-live-data", async (req, res) => {
+  const result = await refreshLiveMatchFeed("manual");
+
+  if (result.skipped) {
+    return res.status(409).json({
+      message: result.reason,
+      refreshState,
+    });
+  }
+
+  if (!result.ok) {
+    return res.status(500).json({
+      message: "Refresh failed",
+      ...result,
+      refreshState,
+    });
+  }
+
+  res.json({
+    message: "Refresh completed",
+    ...result,
+    refreshState,
+  });
 });
 
 app.get("/fetch-weather/:city", async (req, res) => {

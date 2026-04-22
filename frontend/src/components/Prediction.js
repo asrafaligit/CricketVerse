@@ -1,5 +1,16 @@
 import React, { useEffect, useState } from "react";
+import { PREDICTION_API_URL } from "../config";
 import VictoryProgress from "./VictoryProgress";
+
+function getScoreRuns(scoreText) {
+  const match = String(scoreText || "").match(/(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function getScoreWickets(scoreText) {
+  const match = String(scoreText || "").match(/\d+\/(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
 
 const Prediction = ({ match }) => {
   const [probability, setProbability] = useState(null);
@@ -9,55 +20,61 @@ const Prediction = ({ match }) => {
   useEffect(() => {
     const makePrediction = async () => {
       try {
-        const inning2 = match.inning_2;
-        if (!inning2?.batting?.length) {
-          setMessage(
-            "Prediction needs a detailed scorecard, which is disabled in free API mode"
-          );
+        setLoading(true);
+        setMessage("");
+        setProbability(null);
+
+        const stats = match?.match_stats;
+        const inning2 = match?.inning_2;
+
+        if (!inning2?.batting?.length || !stats) {
+          setMessage("Prediction needs a richer live scorecard snapshot.");
           return;
         }
 
-        const ballsBowled =
-          inning2.batting?.reduce((sum, b) => {
-            const balls = parseInt(b.balls || 0);
-            return sum + (isNaN(balls) ? 0 : balls);
-          }, 0) || 0;
+        const targetScore = stats.target || getScoreRuns(match.score1) + 1;
+        const currentScore = stats.currentRuns ?? getScoreRuns(match.score2);
+        const wicketsFallen = stats.currentWickets ?? getScoreWickets(match.score2);
+        const ballsRemaining = Math.max(stats.ballsRemaining ?? 0, 0);
+        const runsToGet = Math.max(stats.runsRequired ?? targetScore - currentScore, 0);
+        const currentRunRate = Number(stats.currentRunRate ?? 0);
+        const requiredRunRate = Number(stats.requiredRunRate ?? 0);
+        const wicketsRemaining = Math.max(stats.wicketsInHand ?? 10 - wicketsFallen, 0);
 
-        const oversCompleted = Math.floor(ballsBowled / 6);
-        const ballsThisOver = ballsBowled % 6;
+        if (!targetScore || ballsRemaining < 0) {
+          setMessage("Prediction is unavailable for the current match state.");
+          return;
+        }
 
-        const target_score = parseInt(match.score1?.split("/")[0]) + 1;
-        const current_score = parseInt(match.score2?.split("/")[0]) || 0;
-        const wickets_fallen = parseInt(match.score2?.split("/")[1]) || 0;
+        if (runsToGet <= 0) {
+          setMessage("Match Already Won");
+          return;
+        }
 
-        const batter_runs = parseInt(inning2.batting?.[0]?.runs || 0);
-        const batter_balls = parseInt(inning2.batting?.[0]?.balls || 1);
-        const non_striker_runs = parseInt(inning2.batting?.[1]?.runs || 0);
-        const non_striker_balls = parseInt(inning2.batting?.[1]?.balls || 1);
+        if (ballsRemaining === 0 || wicketsRemaining === 0) {
+          setMessage("Match Lost");
+          return;
+        }
 
-        const balls_remaining = 120 - (oversCompleted * 6 + ballsThisOver);
-        const runs_to_get = target_score - current_score;
-        const wickets_remaining = 10 - wickets_fallen;
-        const current_run_rate =
-          current_score / ((oversCompleted * 6 + ballsThisOver) / 6);
-        const required_run_rate = runs_to_get / (balls_remaining / 6);
+        const striker = inning2.batting?.[0] || {};
+        const nonStriker = inning2.batting?.[1] || {};
 
         const features = {
-          "Target Score": target_score,
-          "Innings Runs": current_score,
-          "Innings Wickets": wickets_fallen,
-          "Balls Remaining": balls_remaining,
-          wickets_remaining: wickets_remaining,
-          "Runs to Get": runs_to_get,
-          current_run_rate: current_run_rate,
-          required_run_rate: required_run_rate,
-          "Total Batter Runs": batter_runs,
-          "Total Non Striker Runs": non_striker_runs,
-          "Batter Balls Faced": batter_balls,
-          "Non Striker Balls Faced": non_striker_balls,
+          "Target Score": targetScore,
+          "Innings Runs": currentScore,
+          "Innings Wickets": wicketsFallen,
+          "Balls Remaining": ballsRemaining,
+          wickets_remaining: wicketsRemaining,
+          "Runs to Get": runsToGet,
+          current_run_rate: currentRunRate,
+          required_run_rate: requiredRunRate,
+          "Total Batter Runs": Number(striker.runs || 0),
+          "Total Non Striker Runs": Number(nonStriker.runs || 0),
+          "Batter Balls Faced": Number(striker.balls || 0),
+          "Non Striker Balls Faced": Number(nonStriker.balls || 0),
         };
 
-        const res = await fetch("http://localhost:5000/predict", {
+        const res = await fetch(`${PREDICTION_API_URL}/predict`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(features),
@@ -65,8 +82,8 @@ const Prediction = ({ match }) => {
 
         const data = await res.json();
         if (res.ok) {
-          setProbability(data.victoryProbability);
-          setMessage(data.message);
+          setProbability(Number(data.victoryProbability));
+          setMessage(data.message || "");
         } else {
           setMessage(data.error || "Prediction error");
         }
@@ -80,18 +97,24 @@ const Prediction = ({ match }) => {
 
     if (match && match.status !== "RESULT") {
       makePrediction();
+    } else {
+      setLoading(false);
     }
   }, [match]);
 
-  if (loading)
-    return <p style={{ color: "#aaa" }}>🔄 Calculating prediction...</p>;
-  if (message === "Match Already Won")
-    return <p style={{ color: "#00FF00" }}>✅ Match Already Won</p>;
-  if (message === "Match Lost")
-    return <p style={{ color: "#FF4C4C" }}>❌ Match Already Lost</p>;
-  if (probability !== null)
+  if (loading) {
+    return <p className="cv-subtext">Calculating live prediction...</p>;
+  }
+  if (message === "Match Already Won") {
+    return <p className="prediction-state prediction-state--win">Match already won.</p>;
+  }
+  if (message === "Match Lost") {
+    return <p className="prediction-state prediction-state--loss">Chase no longer live.</p>;
+  }
+  if (probability !== null && Number.isFinite(probability)) {
     return <VictoryProgress probability={probability} />;
-  return <p style={{ color: "#f44336" }}>⚠️ {message}</p>;
+  }
+  return <p className="prediction-state prediction-state--alert">{message}</p>;
 };
 
 export default Prediction;

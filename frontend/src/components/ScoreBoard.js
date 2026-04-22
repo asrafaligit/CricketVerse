@@ -1,250 +1,222 @@
-"use client";
-
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "../config";
 
-const ScoreBoard = ({ onCurrentMatchChange }) => {
-  const [matches, setMatches] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+function getUiRefreshMs() {
+  const hour = new Date().getHours();
+  return hour >= 8 && hour < 23 ? 60 * 1000 : 3 * 60 * 1000;
+}
+
+function formatRelative(dateValue) {
+  if (!dateValue) return "Waiting for sync";
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(dateValue).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
+
+function getStatusClass(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "live") return "live";
+  if (normalized === "result") return "result";
+  return "fixture";
+}
+
+function getDisplaySeriesName(match) {
+  const fullSeries = String(match?.series || "").trim();
+  const matchup = `${match?.team1 || ""} vs ${match?.team2 || ""}`.trim();
+
+  if (!fullSeries) return "Series unavailable";
+  if (matchup && fullSeries.toLowerCase().startsWith(matchup.toLowerCase())) {
+    return fullSeries.slice(matchup.length).replace(/^,\s*/, "").trim() || fullSeries;
+  }
+
+  return fullSeries;
+}
+
+const ScoreBoard = () => {
   const navigate = useNavigate();
+  const railRef = useRef(null);
+  const [matches, setMatches] = useState([]);
+  const [refreshMeta, setRefreshMeta] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  const fetchHome = async ({ showLoader = false } = {}) => {
+    if (showLoader) setLoading(true);
+    try {
+      const [matchesRes, statusRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/get-data`),
+        fetch(`${API_BASE_URL}/refresh-status`),
+      ]);
+
+      if (!matchesRes.ok) throw new Error(`Match feed failed: ${matchesRes.status}`);
+      if (!statusRes.ok) throw new Error(`Refresh status failed: ${statusRes.status}`);
+
+      const [matchJson, statusJson] = await Promise.all([
+        matchesRes.json(),
+        statusRes.json(),
+      ]);
+
+      setMatches(Array.isArray(matchJson) ? matchJson : []);
+      setRefreshMeta(statusJson);
+      setError("");
+    } catch (err) {
+      setError(err.message || "Unable to load matches");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchMatchData = async () => {
-      try {
-        // Fetch match data from the backend
-        const response = await fetch(`${API_BASE_URL}/get-data`);
-        const rawData = await response.json();
-        const uniqueMatches = removeDuplicates(rawData);
-        const latestMatches = uniqueMatches.slice(0, 3);
-        setMatches(latestMatches);
-      } catch (error) {
-        console.error("Error fetching match data:", error);
-      }
-    };
-
-    fetchMatchData();
-    const interval = setInterval(fetchMatchData, 30000);
-    return () => clearInterval(interval);
+    fetchHome({ showLoader: true });
+    const intervalId = setInterval(() => fetchHome(), getUiRefreshMs());
+    return () => clearInterval(intervalId);
   }, []);
 
-  const removeDuplicates = (matches) => {
-    const seen = new Map();
-    matches.forEach((match) => {
-      if (match.match_id) {
-        seen.set(match.match_id, match); // use match_id as unique key
-      }
-    });
-    return Array.from(seen.values());
+  const triggerRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/refresh-live-data`, { method: "POST" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message || "Sync failed");
+      await fetchHome();
+    } catch (err) {
+      setError(err.message || "Sync failed");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
-  const moveLeft = () => {
-    if (!matches.length) return;
-    setCurrentIndex(
-      (prevIndex) => (prevIndex - 1 + matches.length) % matches.length
-    );
+  const scrollRail = (direction) => {
+    const rail = railRef.current;
+    if (!rail) return;
+    rail.scrollBy({
+      left: direction * Math.max(rail.clientWidth * 0.92, 320),
+      behavior: "smooth",
+    });
   };
-  const moveRight = () => {
-    if (!matches.length) return;
-    setCurrentIndex((prevIndex) => (prevIndex + 1) % matches.length);
-  };
+
+  if (loading) {
+    return <div className="cv-panel cv-loading">Loading matches...</div>;
+  }
 
   return (
-    <div style={styles.container}>
-      <h2 style={styles.heading}>Recent Matches</h2>
+    <section className="home-shell">
+      <div className="home-hero cv-panel">
+        <div className="home-hero__copy">
+          <p className="cv-eyebrow">Live match desk</p>
+          <h2>Track multiple matches at a glance.</h2>
+          <p className="home-hero__sub">
+            Browse the compact match cards, then open any match for the richer full-width detail view.
+          </p>
+        </div>
 
-      <button
-        style={{ ...styles.arrowButton, left: "10px" }}
-        onClick={moveLeft}
-      >
-        ⬅
-      </button>
-      <button
-        style={{ ...styles.arrowButton, right: "10px" }}
-        onClick={moveRight}
-      >
-        ➡
-      </button>
-
-      <div style={styles.scrollContainer}>
-        {matches.map((match, index) => {
-          let position =
-            (index - currentIndex + matches.length) % matches.length;
-
-          return (
-            <div
-              key={match.match_id}
-              onClick={() => {
-                onCurrentMatchChange(match);
-                navigate(`/match/${match.match_id}`);
-              }}
-              style={{
-                ...styles.matchCard,
-                cursor: "pointer",
-                transform: `translateX(${(position - 1) * 500}px) scale(${
-                  position === 1 ? 1.2 : 1
-                })`,
-                opacity: position === 1 ? 1 : 0.5,
-                zIndex: position === 1 ? 10 : 5,
-                transition:
-                  "transform 0.5s ease-in-out, opacity 0.5s ease-in-out",
-              }}
-            >
-              <div style={styles.cardContent}>
-                <div style={styles.statusBar}>
-                  <span style={styles.statusDot}></span>
-                  <span style={styles.statusText}>{match.status}</span>
-                </div>
-                <div style={styles.teamsContainer}>
-                  <div style={styles.team1Box}>
-                    <span style={styles.teamName}>{match.team1}</span>
-                    <span style={styles.score}>{match.score1}</span>
-                  </div>
-                  <span style={styles.vs}>VS</span>
-                  <div style={styles.team2Box}>
-                    <span style={styles.teamName}>{match.team2}</span>
-                    <span style={styles.score}>{match.score2}</span>
-                  </div>
-                </div>
-
-                {match.status === "RESULT" && (
-                  <div style={styles.resultContainer}>
-                    <span style={styles.resultLabel}>Result:</span>
-                    <span style={styles.resultText}>{match.match_result}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        <div className="sync-stack">
+          <button
+            className={`sync-dial ${refreshing ? "sync-dial--active" : ""}`}
+            onClick={triggerRefresh}
+            title="Sync live data"
+            aria-label="Sync live data"
+          >
+            <span className="sync-dial__ring" />
+            <span className="sync-dial__core">{refreshing ? "..." : "Sync"}</span>
+          </button>
+          <button className="detail-refresh" onClick={triggerRefresh}>
+            {refreshing ? "Refreshing..." : "Refresh for latest match detail"}
+          </button>
+        </div>
       </div>
-    </div>
-  );
-};
 
-const styles = {
-  container: {
-    marginTop: "20px",
-    padding: "20px",
-    backgroundColor: "#1a1a1a",
-    borderRadius: "15px",
-    boxShadow: "0 10px 20px rgba(0,0,0,0.2), 0 6px 6px rgba(0,0,0,0.1)",
-    position: "relative",
-  },
-  heading: {
-    fontSize: "2.5rem",
-    fontWeight: "bold",
-    color: "#03dac6",
-    textAlign: "center",
-    marginBottom: "30px",
-    textTransform: "uppercase",
-    letterSpacing: "3px",
-  },
-  scrollContainer: {
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-    gap: "30px",
-    padding: "20px 10px",
-    width: "100%",
-    position: "relative",
-    height: "260px",
-  },
-  matchCard: {
-    position: "absolute",
-    minWidth: "350px",
-    backgroundColor: "#292929",
-    borderRadius: "15px",
-    perspective: "1000px",
-    transition: "transform 0.6s, opacity 0.6s",
-  },
-  cardContent: {
-    padding: "25px",
-    transformStyle: "preserve-3d",
-  },
-  statusBar: {
-    display: "flex",
-    alignItems: "center",
-    marginBottom: "20px",
-  },
-  statusDot: {
-    width: "12px",
-    height: "12px",
-    borderRadius: "50%",
-    backgroundColor: "#03dac6",
-    marginRight: "10px",
-    animation: "pulse 1.5s infinite",
-  },
-  statusText: {
-    fontSize: "1rem",
-    color: "#03dac6",
-    fontWeight: "bold",
-  },
-  teamsContainer: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: "25px",
-    padding: "0 20px",
-    width: "100%",
-  },
-  team1Box: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    flex: 1,
-  },
-  team2Box: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    flex: 1,
-  },
-  teamName: {
-    fontSize: "1.5rem",
-    fontWeight: "bold",
-    color: "#ffffff",
-    marginBottom: "10px",
-  },
-  vs: {
-    fontSize: "2.2rem",
-    color: "#bb86fc",
-    margin: "0 30px",
-    fontWeight: "bold",
-  },
-  score: {
-    fontSize: "1.5rem",
-    fontWeight: "bold",
-    color: "#03dac6",
-  },
-  resultContainer: {
-    textAlign: "center",
-    backgroundColor: "rgba(187, 134, 252, 0.1)",
-    borderRadius: "8px",
-    padding: "10px",
-  },
-  resultLabel: {
-    fontSize: "1.1rem",
-    color: "#bb86fc",
-    marginRight: "8px",
-  },
-  resultText: {
-    fontSize: "1.2rem",
-    fontWeight: "bold",
-    color: "#ffffff",
-  },
-  arrowButton: {
-    position: "absolute",
-    top: "50%",
-    transform: "translateY(-50%)",
-    fontSize: "3rem",
-    backgroundColor: "transparent",
-    color: "#03dac6",
-    border: "none",
-    cursor: "pointer",
-    zIndex: 20,
-  },
+      <div className="home-strip__meta cv-panel">
+        <div>
+          <p className="cv-eyebrow">Auto cadence</p>
+          <strong>{refreshMeta?.window === "day" ? "Day mode" : "Night mode"}</strong>
+        </div>
+        <div>
+          <p className="cv-eyebrow">Last sync</p>
+          <strong>{formatRelative(refreshMeta?.lastRunCompletedAt)}</strong>
+        </div>
+        <div>
+          <p className="cv-eyebrow">Matches</p>
+          <strong>{matches.length}</strong>
+        </div>
+      </div>
+
+      {error && <div className="cv-panel cv-error">{error}</div>}
+
+      <div className="rail-stage cv-panel">
+        <button
+          className="rail-control rail-control--left"
+          onClick={() => scrollRail(-1)}
+          aria-label="Scroll left"
+        >
+          &#8592;
+        </button>
+
+        <div className="match-rail" ref={railRef}>
+          {matches.map((match) => (
+            <article
+              key={`${match.match_id}-${match.last_synced_at}`}
+              className="match-shell match-shell--compact"
+              onClick={() => navigate(`/match/${match.match_id}`)}
+            >
+              <div className="match-shell__top">
+                <div>
+                  <p className="match-series">{match.series || "Series unavailable"}</p>
+                  <span className="match-shell__time">{formatRelative(match.last_synced_at)}</span>
+                </div>
+                <span className={`match-pill match-pill--${getStatusClass(match.status)}`}>
+                  {match.status}
+                </span>
+              </div>
+
+              <div className="team-stack">
+                <div className="team-stack__row">
+                  <div className="team-stack__identity">
+                    {match.team1_img ? (
+                      <img src={match.team1_img} alt={match.team1} />
+                    ) : (
+                      <span>{match.team1.slice(0, 1)}</span>
+                    )}
+                    <label>{match.team1}</label>
+                  </div>
+                  <strong>{match.score1 || "Yet to bat"}</strong>
+                </div>
+
+                <div className="team-stack__divider">vs</div>
+
+                <div className="team-stack__row">
+                  <div className="team-stack__identity">
+                    {match.team2_img ? (
+                      <img src={match.team2_img} alt={match.team2} />
+                    ) : (
+                      <span>{match.team2.slice(0, 1)}</span>
+                    )}
+                    <label>{match.team2}</label>
+                  </div>
+                  <strong>{match.score2 || "Yet to bat"}</strong>
+                </div>
+              </div>
+
+              <p className="match-series match-series--compact">
+                {getDisplaySeriesName(match)}
+              </p>
+            </article>
+          ))}
+        </div>
+
+        <button
+          className="rail-control rail-control--right"
+          onClick={() => scrollRail(1)}
+          aria-label="Scroll right"
+        >
+          &#8594;
+        </button>
+      </div>
+    </section>
+  );
 };
 
 export default ScoreBoard;

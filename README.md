@@ -1,146 +1,83 @@
-# 🏏 CricketVerse
+# CricketVerse
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/asrafaligit/CricketVerse/scraper.yml?branch=main)
-![Repo Size](https://img.shields.io/github/repo-size/asrafaligit/CricketVerse)
-![Last Commit](https://img.shields.io/github/last-commit/asrafaligit/CricketVerse)
-![Issues](https://img.shields.io/github/issues/asrafaligit/CricketVerse)
-![License](https://img.shields.io/badge/license-MIT-green)
+CricketVerse is a live cricket match dashboard with match tracking, weather context, win prediction, and toss-decision support.
 
----
+## Stack
 
-## 📌 Overview
+- Frontend: React
+- Core backend: Node.js + Express + MongoDB
+- Prediction service: Flask on port `5000`
+- Toss advisor service: Flask on port `5001`
 
-**CricketVerse** is a full-stack live cricket match tracking and prediction platform.
+## Current Data Flow
 
-- 🔍 Scrapes **live scores** from ESPN CricInfo.
-- ☁️ Stores **match data** in **MongoDB Atlas**.
-- 🔄 Fetches **weather data** for match venues.
-- 🧩 Runs **ML models** to predict match outcomes & toss decisions.
-- ⚙️ Provides REST APIs for your frontend.
-- 🌐 Deployed with **Render**, **GitHub Actions** for automation.
+The live match feed is now fetched directly by the Node backend from CricAPI.
 
----
+- `backend/backend.js` fetches match lists and scorecards
+- the backend stores every snapshot in MongoDB
+- `/get-data` returns the newest snapshot per match
+- weather is fetched through Visual Crossing and attached by venue/date
+- the frontend reads only backend APIs
 
-## 📂 Project Structure
+The backend auto-refresh cadence is:
 
-CricketVerse/
-├── backend/ # Express server (Node.js)
-│ ├── backend.js
-│ ├── .env # Environment variables (Mongo URI, API keys)
-│ ├── package.json
-├── Scraping/ # Python scraper (BeautifulSoup, Requests)
-│ ├── Scraper.py
-├── .github/workflows/ # GitHub Actions for cron scraping
-│ ├── scraper.yml
-├── README.md # This file!
+- Day: every `20` minutes from `08:00` to `23:00` Asia/Kolkata
+- Night: every `60` minutes from `23:00` to `08:00` Asia/Kolkata
 
-markdown
-Copy
-Edit
+## Run Locally
 
----
-
-## ⚙️ Tech Stack
-
-- **Frontend:** React (separate repo or `/frontend` if included)
-- **Backend:** Node.js + Express
-- **Database:** MongoDB Atlas
-- **Scraper:** Python (Requests, BeautifulSoup)
-- **Automation:** GitHub Actions
-- **Deployment:** Render
-
----
-
-## 🚀 How It Works
-
-1️⃣ **Python Scraper**
-
-- Runs every **5 mins** (GitHub Actions).
-- Fetches live matches, scorecards, venues & dates.
-- Sends data to backend API `/save-data`.
-
-2️⃣ **Express Backend**
-
-- Receives & stores match data.
-- Calls **Visual Crossing Weather API** if weather is missing.
-- Provides `/get-data` & `/get-match-by-matchid` endpoints.
-
-3️⃣ **Frontend**
-
-- Calls backend APIs.
-- Displays live scores, win predictions, toss advisor.
-
----
-
-## 🔑 Environment Variables
-
-You **must** set these:
-
-| Key                       | Description                     |
-| ------------------------- | ------------------------------- |
-| `MONGO_URI`               | MongoDB Atlas connection string |
-| `VISUAL_CROSSING_API_KEY` | Weather API key                 |
-| `REACT_APP_API_URL`       | Backend base URL (for scraper)  |
-
-**Where to add:**
-
-- `.env` in `/backend`
-- GitHub → `Settings` → `Secrets` → `Actions` → add `REACT_APP_API_URL`
-
----
-
-## ⚙️ Running Locally
-
-**Backend:**
+### 1. Start the backend
 
 ```bash
 cd backend
 npm install
 node backend.js
-Scraper (manual):
-
-bash
-Copy
-Edit
-cd Scraping
-pip install requests beautifulsoup4 fake-useragent python-dotenv
-python Scraper.py
-⚡ GitHub Actions Cron
-Runs automatically every 5 mins.
-
-File: .github/workflows/scraper.yml
-
-Also can be triggered manually under Actions tab.
-
-🧠 Predictions
-2 ML models:
-
-Win probability
-
-Toss decision
-
-(These should be deployed via backend routes like /predict-win or /predict-toss. Not detailed here.)
-
-🌍 Deployment
-Backend: Render
-
-Frontend: (same or different host)
-
-Database: MongoDB Atlas
-
-📜 License
-MIT License
-
-🙌 Author
-Asraf Ali
-
-⭐️ Show Support
-If you find this useful:
-
-✅ Star this repo
-✅ Fork & contribute
-✅ Open issues & pull requests
-
-📣 Feedback
-Feel free to file an issue or connect with me for improvements.
 ```
+
+### 2. Start the frontend
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+### 3. Start optional ML services
+
+Prediction service:
+
+```bash
+cd prediction
+python predict_server.py
+```
+
+Toss advisor:
+
+```bash
+cd prediction
+python decision_advisor.py
+```
+
+## Environment Variables
+
+Backend:
+
+- `MONGO_URI`
+- `CRICKET_DATA_API_KEY`
+- `VISUAL_CROSSING_API_KEY`
+- `CRICKET_DATA_SOURCE` (`live` or `fixture`)
+- `DAY_REFRESH_INTERVAL_MINUTES`
+- `NIGHT_REFRESH_INTERVAL_MINUTES`
+- `DAY_REFRESH_START_HOUR`
+- `NIGHT_REFRESH_START_HOUR`
+
+Frontend:
+
+- `REACT_APP_API_URL`
+- `REACT_APP_PREDICTION_API_URL`
+- `REACT_APP_TOSS_ADVISOR_API_URL`
+
+## Notes
+
+- `Scraping/api_source.py` is no longer part of the active Node refresh pipeline, but it is still referenced by older helper/tests files. Do not delete it yet unless you also remove or rewrite those references.
+- `frontend/build/` is generated output and should not be committed as source.
