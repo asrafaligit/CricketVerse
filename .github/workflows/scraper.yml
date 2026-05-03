@@ -1,8 +1,6 @@
 name: Run Scraper
 
 on:
-  schedule:
-    - cron: "*/20 * * * *" # Runs every 20 minutes to stay within the free daily quota
   workflow_dispatch: # Lets you run it manually too
 
 jobs:

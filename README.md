@@ -14,9 +14,12 @@ CricketVerse is a live cricket match dashboard with match tracking, weather cont
 The live match feed is now fetched directly by the Node backend from CricAPI.
 
 - `backend/backend.js` fetches match lists and scorecards
-- the backend stores every snapshot in MongoDB
+- live/fixture snapshots are cached for `LIVE_MATCH_CACHE_MINUTES` minutes
+- completed matches are upserted as retained records and expire after `DATA_RETENTION_DAYS`
+- MongoDB TTL indexes remove expired match, weather, and news cache documents
 - `/get-data` returns the newest snapshot per match
 - weather is fetched through Visual Crossing and attached by venue/date
+- `/news/sources` proxies the NewsAPI sports sources request
 - the frontend reads only backend APIs
 
 The backend auto-refresh cadence is:
@@ -65,7 +68,11 @@ Backend:
 - `MONGO_URI`
 - `CRICKET_DATA_API_KEY`
 - `VISUAL_CROSSING_API_KEY`
+- `NEWS_API_KEY`
 - `CRICKET_DATA_SOURCE` (`live` or `fixture`)
+- `LIVE_MATCH_CACHE_MINUTES` (default `60`)
+- `DATA_RETENTION_DAYS` (default `30`)
+- `NEWS_CACHE_MINUTES` (default `60`)
 - `DAY_REFRESH_INTERVAL_MINUTES`
 - `NIGHT_REFRESH_INTERVAL_MINUTES`
 - `DAY_REFRESH_START_HOUR`

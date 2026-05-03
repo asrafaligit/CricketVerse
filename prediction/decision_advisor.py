@@ -4,6 +4,11 @@ from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "toss-advisor"})
+
 # === Load and Preprocess Dataset ===
 try:
     df = pd.read_csv("filtered_t20i_Matches_Data.csv")

@@ -45,9 +45,18 @@ The backend will then use:
 ## Validation
 
 ```bash
-cd backend && node --check backend.js
+cd backend && node --check backend.js && node --check news.js
 cd frontend && npm run build
 ```
+
+## Cache Retention
+
+Set these in `.env` or `backend/.env`:
+
+- `LIVE_MATCH_CACHE_MINUTES=60`
+- `DATA_RETENTION_DAYS=30`
+- `NEWS_API_KEY=your_newsapi_key`
+- `NEWS_CACHE_MINUTES=60`
 
 ## Important
 

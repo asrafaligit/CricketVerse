@@ -88,8 +88,7 @@ const Prediction = ({ match }) => {
           setMessage(data.error || "Prediction error");
         }
       } catch (err) {
-        console.error("Prediction failed:", err);
-        setMessage("Failed to get prediction");
+        setMessage("Prediction not available for this match.");
       } finally {
         setLoading(false);
       }

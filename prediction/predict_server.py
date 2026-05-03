@@ -8,6 +8,10 @@ CORS(app)
 
 model = joblib.load("random_forest_model.pkl")
 
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "prediction"})
+
 @app.route("/predict", methods=["POST"])
 def predict():
     try:

@@ -1,13 +1,14 @@
 const fs = require("fs/promises");
 const path = require("path");
 
-require("dotenv").config({ path: path.join(__dirname, ".env") });
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+require("dotenv").config({ path: path.join(__dirname, ".env"), quiet: true });
+require("dotenv").config({ path: path.join(__dirname, "..", ".env"), quiet: true });
 
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const axios = require("axios");
+const newsRouter = require("./news");
 
 const app = express();
 app.use(cors());
@@ -23,6 +24,10 @@ const SCORECARD_FIXTURE_PATH =
 const LIVE_SCORECARD_REFRESH_MS = 5 * 60 * 1000;
 const FAILED_SCORECARD_RETRY_MS = 30 * 60 * 1000;
 const COMPLETED_SCORECARD_REFRESH_MS = 24 * 60 * 60 * 1000;
+const LIVE_MATCH_CACHE_MINUTES = Number(process.env.LIVE_MATCH_CACHE_MINUTES || 60);
+const LIVE_MATCH_CACHE_MS = LIVE_MATCH_CACHE_MINUTES * 60 * 1000;
+const DATA_RETENTION_DAYS = Number(process.env.DATA_RETENTION_DAYS || 30);
+const DATA_RETENTION_MS = DATA_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const APP_TIMEZONE = process.env.CRICKET_DATA_TIMEZONE || "Asia/Kolkata";
 const DAY_REFRESH_START_HOUR = Number(process.env.DAY_REFRESH_START_HOUR || 8);
 const NIGHT_REFRESH_START_HOUR = Number(process.env.NIGHT_REFRESH_START_HOUR || 23);
@@ -36,12 +41,10 @@ const MATCH_FIXTURE_PATH =
 const CRICKET_DATA_ENDPOINT = process.env.CRICKET_DATA_ENDPOINT || "matches";
 
 mongoose
-  .connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => {
+  .connect(MONGO_URI)
+  .then(async () => {
     console.log("MongoDB connected");
+    await ensureRetentionExpiries();
     startAutoRefreshLoop();
     app.listen(PORT, () => {
       console.log(`Server running at http://localhost:${PORT}`);
@@ -150,6 +153,7 @@ const MatchDataSchema = new mongoose.Schema({
   venue: String,
   date: String,
   series: String,
+  series_id: String,
   toss: String,
   player_of_the_match: String,
   current_run_rate: String,
@@ -166,9 +170,14 @@ const MatchDataSchema = new mongoose.Schema({
   scorecard_source: String,
   scorecard_refreshed_at: Date,
   source_endpoint: String,
+  cache_policy: String,
   last_synced_at: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true },
 });
+
+MatchDataSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+MatchDataSchema.index({ match_id: 1, status: 1, last_synced_at: -1 });
 
 const weatherSchema = new mongoose.Schema({
   city: String,
@@ -179,10 +188,41 @@ const weatherSchema = new mongoose.Schema({
   cloudCover: Number,
   conditions: String,
   fetchedAt: { type: Date, default: Date.now },
+  expiresAt: { type: Date, required: true },
 });
+
+weatherSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 const MatchData = mongoose.model("MatchData", MatchDataSchema, "MatchData");
 const WeatherData = mongoose.model("WeatherData", weatherSchema, "WeatherData");
+
+async function ensureRetentionExpiries() {
+  const now = new Date();
+  await Promise.all([
+    MatchData.updateMany(
+      { expiresAt: { $exists: false }, status: "RESULT" },
+      {
+        $set: {
+          cache_policy: "completed-match-retention",
+          expiresAt: getRetentionExpiry(now),
+        },
+      }
+    ),
+    MatchData.updateMany(
+      { expiresAt: { $exists: false }, status: { $ne: "RESULT" } },
+      {
+        $set: {
+          cache_policy: "live-match-cache",
+          expiresAt: getLiveCacheExpiry(now),
+        },
+      }
+    ),
+    WeatherData.updateMany(
+      { expiresAt: { $exists: false } },
+      { $set: { expiresAt: getRetentionExpiry(now) } }
+    ),
+  ]);
+}
 
 let refreshState = {
   inProgress: false,
@@ -222,8 +262,53 @@ function scheduleNextRefresh() {
   return nextRefreshAt;
 }
 
+function getRetentionExpiry(fromDate = new Date()) {
+  return new Date(fromDate.getTime() + DATA_RETENTION_MS);
+}
+
+function getLiveCacheExpiry(fromDate = new Date()) {
+  return new Date(fromDate.getTime() + LIVE_MATCH_CACHE_MS);
+}
+
+function getMatchCachePolicy(status) {
+  return status === "RESULT" ? "completed-match-retention" : "live-match-cache";
+}
+
+function getMatchExpiry(status, fromDate = new Date()) {
+  return status === "RESULT"
+    ? getRetentionExpiry(fromDate)
+    : getLiveCacheExpiry(fromDate);
+}
+
 function cleanTeamName(teamName) {
   return String(teamName || "TBD").trim() || "TBD";
+}
+
+function isPlaceholderValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return (
+    !normalized ||
+    normalized === "n/a" ||
+    normalized === "na" ||
+    normalized === "tba" ||
+    normalized === "tbc" ||
+    normalized === "tbd" ||
+    normalized === "to be confirmed" ||
+    normalized === "to be decided"
+  );
+}
+
+function isUsableWeatherLocation(city, date) {
+  const cityParts = String(city || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return (
+    !isPlaceholderValue(city) &&
+    !cityParts.every(isPlaceholderValue) &&
+    !isPlaceholderValue(date)
+  );
 }
 
 function parseMatchDateTime(match) {
@@ -286,9 +371,9 @@ function getTeamImages(match) {
 }
 
 function formatScoreSummary(score) {
-  const runs = score?.r;
-  const wickets = score?.w;
-  const overs = score?.o;
+  const runs = score?.r ?? score?.runs ?? score?.totalRuns;
+  const wickets = score?.w ?? score?.wickets ?? score?.wkts;
+  const overs = score?.o ?? score?.overs;
 
   if (runs == null || runs === "") return "";
 
@@ -368,6 +453,13 @@ function normalizeMatch(match, endpoint) {
     venue: String(match?.venue || "N/A").trim(),
     date: parsedDate ? parsedDate.toISOString().split("T")[0] : "N/A",
     series: String(match?.series || match?.name || "").trim(),
+    series_id: String(
+      match?.series_id ||
+        match?.seriesId ||
+        match?.seriesInfo?.id ||
+        match?.series_info?.id ||
+        ""
+    ).trim(),
     toss: "N/A",
     player_of_the_match: "N/A",
     current_run_rate: "N/A",
@@ -406,6 +498,7 @@ async function persistMatches(payload) {
     throw new Error("Expected an array of match data");
   }
 
+  const now = new Date();
   const uniqueWeatherChecks = new Set();
 
   for (const match of payload) {
@@ -415,7 +508,7 @@ async function persistMatches(payload) {
 
     const city = match.venue?.trim();
     const date = match.date?.trim();
-    if (!city || !date || city === "N/A" || date === "N/A") {
+    if (!isUsableWeatherLocation(city, date)) {
       continue;
     }
 
@@ -432,15 +525,45 @@ async function persistMatches(payload) {
     .filter((match) => match.match_id)
     .map((match) => ({
       ...match,
-      last_synced_at: new Date(),
-      createdAt: new Date(),
+      cache_policy: getMatchCachePolicy(match.status),
+      last_synced_at: now,
+      expiresAt: getMatchExpiry(match.status, now),
     }));
 
-  if (documents.length) {
-    await MatchData.insertMany(documents, { ordered: false });
+  let savedCount = 0;
+
+  for (const match of documents) {
+    if (match.status === "RESULT") {
+      await MatchData.updateMany(
+        { match_id: match.match_id, status: { $ne: "RESULT" } },
+        { $set: { expiresAt: now } }
+      );
+
+      const savedMatch = await MatchData.findOneAndUpdate(
+        { match_id: match.match_id, status: "RESULT" },
+        {
+          $set: match,
+          $setOnInsert: {
+            createdAt: now,
+          },
+        },
+        { upsert: true, new: true }
+      ).lean();
+
+      if (savedMatch) {
+        await enrichMatchIfNeeded(savedMatch);
+      }
+    } else {
+      await MatchData.create({
+        ...match,
+        createdAt: now,
+      });
+    }
+
+    savedCount += 1;
   }
 
-  return documents.length;
+  return savedCount;
 }
 
 async function refreshLiveMatchFeed(trigger = "manual") {
@@ -604,14 +727,56 @@ function inferTeamFromInningName(inningName, match, fallbackIndex = 0) {
   return fallbackIndex === 0 ? match.team1 : match.team2;
 }
 
+const PLAYER_NAME_KEYS = [
+  "name",
+  "playerName",
+  "batsmanName",
+  "batterName",
+  "bowlerName",
+  "fullName",
+  "fullname",
+  "longName",
+  "shortName",
+  "title",
+];
+
+function cleanPlayerName(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const name = String(value).trim();
+    return name && name !== "[object Object]" ? name : "";
+  }
+
+  if (typeof value !== "object") return "";
+
+  for (const key of PLAYER_NAME_KEYS) {
+    const nested = cleanPlayerName(value[key]);
+    if (nested) return nested;
+  }
+
+  for (const key of ["player", "batsman", "batter", "bowler", "athlete", "playerDetails"]) {
+    const nested = cleanPlayerName(value[key]);
+    if (nested) return nested;
+  }
+
+  return "";
+}
+
+function pickPlayerName(row, roleKeys, fallback) {
+  for (const key of [...PLAYER_NAME_KEYS, ...roleKeys]) {
+    const name = cleanPlayerName(row?.[key]);
+    if (name) return name;
+  }
+
+  for (const key of ["player", "playerDetails", "athlete", ...roleKeys]) {
+    const name = cleanPlayerName(row?.[key]);
+    if (name) return name;
+  }
+
+  return fallback;
+}
+
 function normalizeBatterRow(row, teamName, inningsLabel) {
-  const playerNode =
-    row?.player ||
-    row?.batsman ||
-    row?.batter ||
-    row?.playerDetails ||
-    row?.athlete ||
-    {};
   const runs = pickField(row, ["runs", "r", "score"]);
   const balls = pickField(row, ["balls", "b"]);
   const fours = pickField(row, ["fours", "4s", "four", "foursCount"]);
@@ -632,19 +797,7 @@ function normalizeBatterRow(row, teamName, inningsLabel) {
   ]);
 
   return {
-    name: String(
-      pickField(row, [
-        "name",
-        "playerName",
-        "batsman",
-        "batter",
-        "batsmanName",
-        "fullName",
-        "fullname",
-      ]) ||
-        pickField(playerNode, ["name", "fullName", "fullname", "longName", "shortName"]) ||
-        "Unknown Player"
-    ),
+    name: pickPlayerName(row, ["batsman", "batter"], "Unknown Player"),
     team: teamName,
     innings: inningsLabel,
     diss_summary: String(dismissal || "not out"),
@@ -657,12 +810,6 @@ function normalizeBatterRow(row, teamName, inningsLabel) {
 }
 
 function normalizeBowlerRow(row, teamName, inningsLabel) {
-  const playerNode =
-    row?.player ||
-    row?.bowler ||
-    row?.playerDetails ||
-    row?.athlete ||
-    {};
   const overs = pickField(row, ["overs", "o"]);
   const maidens = pickField(row, ["maidens", "m"]);
   const runsConceded = pickField(row, ["runsConceded", "runs", "r"]);
@@ -670,18 +817,7 @@ function normalizeBowlerRow(row, teamName, inningsLabel) {
   const economy = pickField(row, ["economy", "econ", "er"]);
 
   return {
-    name: String(
-      pickField(row, [
-        "name",
-        "playerName",
-        "bowler",
-        "bowlerName",
-        "fullName",
-        "fullname",
-      ]) ||
-        pickField(playerNode, ["name", "fullName", "fullname", "longName", "shortName"]) ||
-        "Unknown Bowler"
-    ),
+    name: pickPlayerName(row, ["bowler"], "Unknown Bowler"),
     team: teamName,
     innings: inningsLabel,
     overs: overs != null ? String(overs) : "0",
@@ -847,6 +983,39 @@ function buildCurrentBowlers(data, innings) {
     .slice(0, 2);
 }
 
+function normalizeTeamNameValue(value) {
+  const direct = cleanPlayerName(value);
+  if (direct) return direct;
+  if (typeof value === "object" && value) {
+    return cleanPlayerName(value.name || value.teamName || value.shortname);
+  }
+  return "";
+}
+
+function buildInningSummary(inning, data, index, match) {
+  const explicitSummary = pickField(inning, [
+    "score",
+    "summary",
+    "inningScore",
+    "scoreSummary",
+    "total",
+  ]);
+
+  if (typeof explicitSummary === "string" && explicitSummary.trim()) {
+    return explicitSummary.trim();
+  }
+
+  const scoreNode =
+    (typeof explicitSummary === "object" && explicitSummary) ||
+    toArray(data?.score)[index] ||
+    toArray(match?.score_breakdown)[index] ||
+    {};
+  const summary = formatScoreSummary(scoreNode);
+
+  if (summary) return summary;
+  return String(scoreNode?.summary || "").trim();
+}
+
 function parseScorecardPayload(match, payload, sourceLabel) {
   const data = payload?.data || payload || {};
   const inningsSource = toArray(
@@ -858,15 +1027,16 @@ function parseScorecardPayload(match, payload, sourceLabel) {
       pickField(inning, ["inning", "inningName", "name", "title"]) ||
         `${index === 0 ? match.team1 : match.team2} Inning ${index + 1}`
     );
-    const teamName = inferTeamFromInningName(inningsLabel, match, index);
+    const explicitTeamName = normalizeTeamNameValue(
+      pickField(inning, ["teamName", "team", "battingTeam"])
+    );
+    const teamName = explicitTeamName || inferTeamFromInningName(inningsLabel, match, index);
     const batting = toArray(pickField(inning, ["batting", "batters", "batsmen"]))
       .map((row) => normalizeBatterRow(row, teamName, inningsLabel));
     const bowlingTeam = teamName === match.team1 ? match.team2 : match.team1;
     const bowling = toArray(pickField(inning, ["bowling", "bowlers"]))
       .map((row) => normalizeBowlerRow(row, bowlingTeam, inningsLabel));
-    const summary = String(
-      pickField(inning, ["score", "summary", "inningScore", "scoreSummary"]) || ""
-    );
+    const summary = buildInningSummary(inning, data, index, match);
 
     return {
       match,
@@ -1071,7 +1241,15 @@ async function enrichMatchIfNeeded(match) {
 }
 
 async function fetchWeatherIfNotExists(city, date) {
-  const exists = await WeatherData.findOne({ city, date });
+  if (!isUsableWeatherLocation(city, date) || !process.env.VISUAL_CROSSING_API_KEY) {
+    return;
+  }
+
+  const exists = await WeatherData.findOne({
+    city,
+    date,
+    expiresAt: { $gt: new Date() },
+  });
   if (exists) {
     return;
   }
@@ -1099,6 +1277,7 @@ async function fetchWeatherIfNotExists(city, date) {
       windSpeed: matchedDay.windspeed,
       cloudCover: matchedDay.cloudcover,
       conditions: matchedDay.conditions,
+      expiresAt: getRetentionExpiry(),
     }).save();
   } catch (err) {
     console.error(`Weather fetch failed for ${city}:`, err.message);
@@ -1108,6 +1287,8 @@ async function fetchWeatherIfNotExists(city, date) {
 app.get("/", (req, res) => {
   res.send("CricketVerse Backend API is running");
 });
+
+app.use("/news", newsRouter);
 
 app.post("/save-data", async (req, res) => {
   try {
@@ -1125,7 +1306,11 @@ app.get("/get-data", async (req, res) => {
     const limitStage = Number.isFinite(parsedLimit) && parsedLimit > 0
       ? [{ $limit: parsedLimit }]
       : [];
+    const nonExpiredMatch = {
+      $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }],
+    };
     const matches = await MatchData.aggregate([
+      { $match: nonExpiredMatch },
       { $sort: { last_synced_at: -1, createdAt: -1 } },
       { $group: { _id: "$match_id", doc: { $first: "$$ROOT" } } },
       { $replaceRoot: { newRoot: "$doc" } },
@@ -1144,6 +1329,7 @@ app.get("/get-match-by-matchid/:matchId", async (req, res) => {
     const includePerformance = req.query.includePerformance === "true";
     let match = await MatchData.findOne({
       match_id: req.params.matchId,
+      $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }],
     })
       .sort({ last_synced_at: -1, createdAt: -1 })
       .lean();
@@ -1167,6 +1353,7 @@ app.get("/get-match-history/:matchId", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const history = await MatchData.find({ match_id: req.params.matchId })
+      .or([{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }])
       .sort({ last_synced_at: -1, createdAt: -1 })
       .limit(limit)
       .lean();
@@ -1181,6 +1368,7 @@ app.get("/get-match-history/:matchId", async (req, res) => {
 app.get("/get-weather-by-match/:matchId", async (req, res) => {
   try {
     const match = await MatchData.findOne({ match_id: req.params.matchId })
+      .or([{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }])
       .sort({ last_synced_at: -1, createdAt: -1 })
       .lean();
 
@@ -1191,12 +1379,16 @@ app.get("/get-weather-by-match/:matchId", async (req, res) => {
     const city = String(match.venue || "").trim();
     const date = String(match.date || "").trim();
 
-    if (!city || !date || city === "N/A" || date === "N/A") {
+    if (!isUsableWeatherLocation(city, date)) {
       return res.status(404).send("Weather unavailable for this match");
     }
 
     await fetchWeatherIfNotExists(city, date);
-    const weather = await WeatherData.findOne({ city, date })
+    const weather = await WeatherData.findOne({
+      city,
+      date,
+      expiresAt: { $gt: new Date() },
+    })
       .sort({ fetchedAt: -1 })
       .lean();
 
@@ -1215,6 +1407,8 @@ app.get("/refresh-status", (req, res) => {
   res.json({
     ...refreshState,
     recommendedIntervalMs: getRefreshIntervalMs(),
+    liveMatchCacheMinutes: LIVE_MATCH_CACHE_MINUTES,
+    dataRetentionDays: DATA_RETENTION_DAYS,
     window: isDayRefreshWindow() ? "day" : "night",
     timezone: APP_TIMEZONE,
   });

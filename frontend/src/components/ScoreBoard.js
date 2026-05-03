@@ -1,5 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ArrowsClockwise,
+  CalendarBlank,
+  CaretRight,
+  Clock,
+  Funnel,
+  MagnifyingGlass,
+  MapPin,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { API_BASE_URL } from "../config";
 
 function getUiRefreshMs() {
@@ -9,10 +19,31 @@ function getUiRefreshMs() {
 
 function formatRelative(dateValue) {
   if (!dateValue) return "Waiting for sync";
-  const seconds = Math.max(0, Math.round((Date.now() - new Date(dateValue).getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  return `${Math.round(seconds / 3600)}h ago`;
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return "Recently synced";
+
+  const seconds = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (seconds < 60) return "just now";
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function formatDate(dateValue) {
+  if (!dateValue || dateValue === "N/A") return "Date TBA";
+  const parsed = new Date(dateValue);
+  if (Number.isNaN(parsed.getTime())) return dateValue;
+  return parsed.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function getStatusClass(status) {
@@ -34,11 +65,17 @@ function getDisplaySeriesName(match) {
   return fullSeries;
 }
 
+function firstLetter(value) {
+  return String(value || "?").trim().slice(0, 1).toUpperCase() || "?";
+}
+
+const filters = ["ALL", "LIVE", "FIXTURE", "RESULT"];
+
 const ScoreBoard = () => {
   const navigate = useNavigate();
-  const railRef = useRef(null);
   const [matches, setMatches] = useState([]);
-  const [refreshMeta, setRefreshMeta] = useState(null);
+  const [activeFilter, setActiveFilter] = useState("ALL");
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -46,24 +83,14 @@ const ScoreBoard = () => {
   const fetchHome = async ({ showLoader = false } = {}) => {
     if (showLoader) setLoading(true);
     try {
-      const [matchesRes, statusRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/get-data`),
-        fetch(`${API_BASE_URL}/refresh-status`),
-      ]);
-
-      if (!matchesRes.ok) throw new Error(`Match feed failed: ${matchesRes.status}`);
-      if (!statusRes.ok) throw new Error(`Refresh status failed: ${statusRes.status}`);
-
-      const [matchJson, statusJson] = await Promise.all([
-        matchesRes.json(),
-        statusRes.json(),
-      ]);
+      const response = await fetch(`${API_BASE_URL}/get-data`);
+      if (!response.ok) throw new Error("matches");
+      const matchJson = await response.json();
 
       setMatches(Array.isArray(matchJson) ? matchJson : []);
-      setRefreshMeta(statusJson);
       setError("");
-    } catch (err) {
-      setError(err.message || "Unable to load matches");
+    } catch {
+      setError("We couldn't load matches right now. Please try again in a moment.");
     } finally {
       setLoading(false);
     }
@@ -79,142 +106,152 @@ const ScoreBoard = () => {
     setRefreshing(true);
     try {
       const response = await fetch(`${API_BASE_URL}/refresh-live-data`, { method: "POST" });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.message || "Sync failed");
+      if (!response.ok) throw new Error("sync");
       await fetchHome();
-    } catch (err) {
-      setError(err.message || "Sync failed");
+    } catch {
+      setError("Sync did not finish. Please try again.");
     } finally {
       setRefreshing(false);
     }
   };
 
-  const scrollRail = (direction) => {
-    const rail = railRef.current;
-    if (!rail) return;
-    rail.scrollBy({
-      left: direction * Math.max(rail.clientWidth * 0.92, 320),
-      behavior: "smooth",
+  const visibleMatches = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return matches.filter((match) => {
+      const statusMatch =
+        activeFilter === "ALL" || String(match.status || "").toUpperCase() === activeFilter;
+      const searchable = [
+        match.team1,
+        match.team2,
+        match.series,
+        match.venue,
+        match.match_result,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return statusMatch && (!normalizedQuery || searchable.includes(normalizedQuery));
     });
-  };
+  }, [activeFilter, matches, query]);
 
   if (loading) {
-    return <div className="cv-panel cv-loading">Loading matches...</div>;
+    return <div className="state-panel">Loading matches...</div>;
   }
 
   return (
-    <section className="home-shell">
-      <div className="home-hero cv-panel">
-        <div className="home-hero__copy">
-          <p className="cv-eyebrow">Live match desk</p>
-          <h2>Track multiple matches at a glance.</h2>
-          <p className="home-hero__sub">
-            Browse the compact match cards, then open any match for the richer full-width detail view.
-          </p>
-        </div>
-
-        <div className="sync-stack">
-          <button
-            className={`sync-dial ${refreshing ? "sync-dial--active" : ""}`}
-            onClick={triggerRefresh}
-            title="Sync live data"
-            aria-label="Sync live data"
-          >
-            <span className="sync-dial__ring" />
-            <span className="sync-dial__core">{refreshing ? "..." : "Sync"}</span>
-          </button>
-          <button className="detail-refresh" onClick={triggerRefresh}>
-            {refreshing ? "Refreshing..." : "Refresh for latest match detail"}
-          </button>
-        </div>
-      </div>
-
-      <div className="home-strip__meta cv-panel">
+    <section className="dashboard-stack">
+      <div className="command-panel">
         <div>
-          <p className="cv-eyebrow">Auto cadence</p>
-          <strong>{refreshMeta?.window === "day" ? "Day mode" : "Night mode"}</strong>
+          <p className="eyebrow">Live match desk</p>
+          <h1>Matches</h1>
         </div>
-        <div>
-          <p className="cv-eyebrow">Last sync</p>
-          <strong>{formatRelative(refreshMeta?.lastRunCompletedAt)}</strong>
-        </div>
-        <div>
-          <p className="cv-eyebrow">Matches</p>
-          <strong>{matches.length}</strong>
-        </div>
-      </div>
-
-      {error && <div className="cv-panel cv-error">{error}</div>}
-
-      <div className="rail-stage cv-panel">
-        <button
-          className="rail-control rail-control--left"
-          onClick={() => scrollRail(-1)}
-          aria-label="Scroll left"
-        >
-          &#8592;
+        <button className="button button--primary" onClick={triggerRefresh} disabled={refreshing}>
+          <ArrowsClockwise size={18} weight="bold" className={refreshing ? "spin" : ""} />
+          {refreshing ? "Syncing" : "Sync now"}
         </button>
+      </div>
 
-        <div className="match-rail" ref={railRef}>
-          {matches.map((match) => (
-            <article
-              key={`${match.match_id}-${match.last_synced_at}`}
-              className="match-shell match-shell--compact"
-              onClick={() => navigate(`/match/${match.match_id}`)}
+      <div className="toolbar">
+        <div className="segmented-control" aria-label="Filter matches">
+          <Funnel size={18} weight="bold" />
+          {filters.map((filter) => (
+            <button
+              key={filter}
+              className={activeFilter === filter ? "is-active" : ""}
+              onClick={() => setActiveFilter(filter)}
             >
-              <div className="match-shell__top">
-                <div>
-                  <p className="match-series">{match.series || "Series unavailable"}</p>
-                  <span className="match-shell__time">{formatRelative(match.last_synced_at)}</span>
-                </div>
-                <span className={`match-pill match-pill--${getStatusClass(match.status)}`}>
-                  {match.status}
-                </span>
-              </div>
-
-              <div className="team-stack">
-                <div className="team-stack__row">
-                  <div className="team-stack__identity">
-                    {match.team1_img ? (
-                      <img src={match.team1_img} alt={match.team1} />
-                    ) : (
-                      <span>{match.team1.slice(0, 1)}</span>
-                    )}
-                    <label>{match.team1}</label>
-                  </div>
-                  <strong>{match.score1 || "Yet to bat"}</strong>
-                </div>
-
-                <div className="team-stack__divider">vs</div>
-
-                <div className="team-stack__row">
-                  <div className="team-stack__identity">
-                    {match.team2_img ? (
-                      <img src={match.team2_img} alt={match.team2} />
-                    ) : (
-                      <span>{match.team2.slice(0, 1)}</span>
-                    )}
-                    <label>{match.team2}</label>
-                  </div>
-                  <strong>{match.score2 || "Yet to bat"}</strong>
-                </div>
-              </div>
-
-              <p className="match-series match-series--compact">
-                {getDisplaySeriesName(match)}
-              </p>
-            </article>
+              {filter.toLowerCase()}
+            </button>
           ))}
         </div>
 
-        <button
-          className="rail-control rail-control--right"
-          onClick={() => scrollRail(1)}
-          aria-label="Scroll right"
-        >
-          &#8594;
-        </button>
+        <label className="search-box">
+          <MagnifyingGlass size={18} weight="bold" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search team, venue, series"
+          />
+        </label>
       </div>
+
+      {error && (
+        <div className="alert-panel">
+          <WarningCircle size={20} weight="duotone" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="match-grid">
+        {visibleMatches.map((match) => (
+          <article
+            key={`${match.match_id}-${match.last_synced_at}`}
+            className="match-card"
+            onClick={() => navigate(`/match/${match.match_id}`)}
+          >
+            <div className="match-card__head">
+              <span className={`status-pill status-pill--${getStatusClass(match.status)}`}>
+                {match.status || "FIXTURE"}
+              </span>
+              <span className="tiny-meta">
+                <Clock size={14} weight="bold" />
+                {formatRelative(match.last_synced_at)}
+              </span>
+            </div>
+
+            <div className="match-card__teams">
+              <div className="team-line">
+                {match.team1_img ? (
+                  <img src={match.team1_img} alt={match.team1} />
+                ) : (
+                  <span>{firstLetter(match.team1)}</span>
+                )}
+                <div>
+                  <strong>{match.team1 || "Team TBA"}</strong>
+                  <small>{match.score1 || "Yet to bat"}</small>
+                </div>
+              </div>
+
+              <div className="team-line">
+                {match.team2_img ? (
+                  <img src={match.team2_img} alt={match.team2} />
+                ) : (
+                  <span>{firstLetter(match.team2)}</span>
+                )}
+                <div>
+                  <strong>{match.team2 || "Team TBA"}</strong>
+                  <small>{match.score2 || "Yet to bat"}</small>
+                </div>
+              </div>
+            </div>
+
+            <div className="match-card__meta">
+              <span>
+                <MapPin size={15} weight="bold" />
+                {match.venue || "Venue TBA"}
+              </span>
+              <span>
+                <CalendarBlank size={15} weight="bold" />
+                {formatDate(match.date)}
+              </span>
+            </div>
+
+            <p className="match-card__series">{getDisplaySeriesName(match)}</p>
+            <p className="match-card__status">{match.match_result || "Status unavailable"}</p>
+
+            <div className="match-card__actions">
+              <span className="open-detail">
+                Open match
+                <CaretRight size={16} weight="bold" />
+              </span>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {!visibleMatches.length && (
+        <div className="state-panel">No matches matched your current filters.</div>
+      )}
     </section>
   );
 };

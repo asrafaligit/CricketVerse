@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "axios": "^1.9.0",
     "body-parser": "^1.20.3",
     "chart.js": "^4.4.7",
